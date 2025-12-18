@@ -364,14 +364,20 @@ def main(argv):
 
     times = [time.monotonic()]
     reward_history = {"steps": [], "rewards": []}
+    v_loss_history = {"steps": [], "v_losses": []}
 
     # Progress function for logging
     def progress(num_steps, metrics):
         times.append(time.monotonic())
         # Track reward for plotting
-        if _RUN_EVALS.value and "eval/episode_reward" in metrics:
-            reward_history["steps"].append(num_steps)
-            reward_history["rewards"].append(metrics["eval/episode_reward"])
+        if _RUN_EVALS.value:
+            if "eval/episode_reward" in metrics:
+                reward_history["steps"].append(num_steps)
+                reward_history["rewards"].append(metrics["eval/episode_reward"])
+
+            if "training/v_loss" in metrics:
+                v_loss_history["steps"].append(num_steps)
+                v_loss_history["v_losses"].append(metrics["training/v_loss"])
 
         # Log to Weights & Biases
         if _USE_WANDB.value and not _PLAY_ONLY.value:
@@ -423,6 +429,26 @@ def main(argv):
         plt.savefig(reward_plot_path, dpi=150)
         plt.close()
         print(f"Reward curve saved to: {reward_plot_path}")
+
+    if v_loss_history["steps"]:
+        plt.figure(figsize=(10, 6))
+        plt.plot(
+            v_loss_history["steps"],
+            v_loss_history["v_losses"],
+            marker="o",
+            markersize=3,
+        )
+        plt.xlabel("Timesteps")
+        plt.ylabel("V Loss")
+        plt.title(
+            f"V Loss Curve - {_ENV_NAME.value} (Recurrent PPO - {_CORE_TYPE.value})"
+        )
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        v_loss_plot_path = str(ckpt_path / "v_loss_curve.png")
+        plt.savefig(v_loss_plot_path, dpi=150)
+        plt.close()
+        print(f"V loss curve saved to: {v_loss_plot_path}")
 
     print("Starting inference...")
 
