@@ -119,6 +119,55 @@ def _remove_pixels(
   return {k: v for k, v in obs.items() if not k.startswith('pixels/')}
 
 
+def _random_translate_pixels(
+    obs: Mapping[str, jax.Array], key: PRNGKey
+) -> Mapping[str, jax.Array]:
+  """Apply random translations to B x T x ... pixel observations.
+
+  The same shift is applied across the unroll_length (T) dimension.
+
+  Args:
+    obs: a dictionary of observations
+    key: a PRNGKey
+
+  Returns:
+    A dictionary of observations with translated pixels
+  """
+
+  @jax.vmap
+  def rt_all_views(
+      ub_obs: Mapping[str, jax.Array], key: PRNGKey
+  ) -> Mapping[str, jax.Array]:
+    # Expects dictionary of unbatched observations.
+    def rt_view(
+        img: jax.Array, padding: int, key: PRNGKey
+    ) -> jax.Array:  # TxHxWxC
+      # Randomly translates a set of pixel inputs.
+      # Adapted from
+      # https://github.com/ikostrikov/jaxrl/blob/main/jaxrl/agents/drq/augmentations.py
+      crop_from = jax.random.randint(key, (2,), 0, 2 * padding + 1)
+      zero = jnp.zeros((1,), dtype=jnp.int32)
+      crop_from = jnp.concatenate([zero, crop_from, zero])
+      padded_img = jnp.pad(
+          img,
+          ((0, 0), (padding, padding), (padding, padding), (0, 0)),
+          mode='edge',
+      )
+      return jax.lax.dynamic_slice(padded_img, crop_from, img.shape)
+
+    out = {}
+    for k_view, v_view in ub_obs.items():
+      if k_view.startswith('pixels/'):
+        key, key_shift = jax.random.split(key)
+        out[k_view] = rt_view(v_view, 4, key_shift)
+    return {**ub_obs, **out}
+
+  bdim = next(iter(obs.items()), None)[1].shape[0]
+  keys = jax.random.split(key, bdim)
+  obs = rt_all_views(obs, keys)
+  return obs
+
+
 def _reset_hidden_on_done(
     hidden: HiddenState,
     done: jnp.ndarray,
@@ -368,6 +417,7 @@ def train(
     max_devices_per_host: Optional[int] = None,
     # high-level control flow
     wrap_env: bool = True,
+    augment_pixels: bool = False,
     # environment wrapper
     num_envs: int = 1,
     episode_length: Optional[int] = None,
@@ -430,6 +480,7 @@ def train(
     num_timesteps: the total number of environment steps to use during training
     max_devices_per_host: maximum number of chips to use per host process
     wrap_env: If True, wrap the environment for training.
+    augment_pixels: whether to add image augmentation to pixel inputs
     num_envs: the number of parallel environments to use for rollouts
     episode_length: the length of an environment episode
     action_repeat: the number of timesteps to repeat an action
@@ -644,6 +695,18 @@ def train(
   ):
     optimizer_state, params, key = carry
     key, key_perm, key_grad = jax.random.split(key, 3)
+
+    if augment_pixels:
+      key, key_rt = jax.random.split(key)
+      r_translate = functools.partial(_random_translate_pixels, key=key_rt)
+      data = types.Transition(
+          observation=r_translate(data.observation),
+          action=data.action,
+          reward=data.reward,
+          discount=data.discount,
+          next_observation=r_translate(data.next_observation),
+          extras=data.extras,
+      )
 
     def convert_data(x: jnp.ndarray):
       x = jax.random.permutation(key_perm, x)
