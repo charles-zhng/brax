@@ -136,6 +136,10 @@ def _reset_hidden_on_done(
   Returns:
     Hidden state with zeros where done=True
   """
+  # Handle None hidden state (for non-recurrent networks like value network)
+  if hidden is None:
+    return None
+
   # Expand done to match hidden state shape
   done_expanded = done[..., None]  # [batch, 1]
 
