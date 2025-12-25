@@ -400,8 +400,10 @@ def make_rnn_ppo_networks(
     noise_std_type: Literal['scalar', 'log'] = 'scalar',
     init_noise_std: float = 1.0,
     state_dependent_std: bool = False,
-    kernel_init_fn: Initializer = jax.nn.initializers.lecun_uniform,
-    kernel_init_kwargs: Mapping[str, Any] | None = None,
+    policy_network_kernel_init_fn: Initializer = jax.nn.initializers.lecun_uniform,
+    policy_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    value_network_kernel_init_fn: Initializer = jax.nn.initializers.lecun_uniform,
+    value_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
 ) -> RNNPPONetworks:
   """Make RNN-PPO networks with preprocessor.
 
@@ -423,14 +425,18 @@ def make_rnn_ppo_networks(
     noise_std_type: Type of noise std ('scalar' or 'log')
     init_noise_std: Initial noise standard deviation
     state_dependent_std: Whether std depends on state
-    kernel_init_fn: Kernel initializer function
-    kernel_init_kwargs: Keyword arguments for kernel initializer
+    policy_network_kernel_init_fn: Kernel initializer function for policy
+    policy_network_kernel_init_kwargs: Kwargs for policy kernel initializer
+    value_network_kernel_init_fn: Kernel initializer function for value
+    value_network_kernel_init_kwargs: Kwargs for value kernel initializer
 
   Returns:
     RNNPPONetworks containing policy and value networks
   """
-  kernel_init_kwargs = kernel_init_kwargs or {}
-  kernel_init = kernel_init_fn(**kernel_init_kwargs)
+  policy_kernel_init_kwargs = policy_network_kernel_init_kwargs or {}
+  value_kernel_init_kwargs = value_network_kernel_init_kwargs or {}
+  policy_kernel_init = policy_network_kernel_init_fn(**policy_kernel_init_kwargs)
+  value_kernel_init = value_network_kernel_init_fn(**value_kernel_init_kwargs)
 
   parametric_action_distribution: distribution.ParametricDistribution
   if distribution_type == 'normal':
@@ -459,7 +465,7 @@ def make_rnn_ppo_networks(
         + [parametric_action_distribution.param_size],
         cell_type=cell_type,
         activation=activation,
-        kernel_init=kernel_init,
+        kernel_init=policy_kernel_init,
     )
   else:
     # For normal distribution, use the policy module with std
@@ -469,7 +475,7 @@ def make_rnn_ppo_networks(
         output_layer_sizes=policy_output_layer_sizes,
         cell_type=cell_type,
         activation=activation,
-        kernel_init=kernel_init,
+        kernel_init=policy_kernel_init,
         noise_std_type=noise_std_type,
         init_noise_std=init_noise_std,
         state_dependent_std=state_dependent_std,
@@ -479,7 +485,7 @@ def make_rnn_ppo_networks(
   value_module = networks.MLP(
       layer_sizes=list(value_hidden_layer_sizes) + [1],
       activation=activation,
-      kernel_init=kernel_init,
+      kernel_init=value_kernel_init,
   )
 
   # Policy network functions
