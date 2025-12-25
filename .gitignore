@@ -59,4 +59,4 @@ sysinfo.txt
 *.apk
 *.unitypackage
 
-UnitySDK.logbrax/training/agents/rnn_ppo/train_pendulum.py
+UnitySDK.log
