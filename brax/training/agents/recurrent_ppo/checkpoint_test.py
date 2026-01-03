@@ -33,7 +33,7 @@ class CheckpointTest(absltest.TestCase):
     super().setUp()
     flags.FLAGS.mark_as_parsed()
 
-  def test_rnn_ppo_params_config(self):
+  def test_recurrent_ppo_params_config(self):
     """Test that network config is properly saved."""
     network_factory = functools.partial(
         rnn_ppo_networks.make_rnn_ppo_networks,
@@ -119,6 +119,19 @@ class CheckpointTest(absltest.TestCase):
     loaded_params = checkpoint.load(epath.Path(path.full_path) / '000000000001')
     loaded_normalizer = loaded_params[0]
     self.assertEqual(loaded_normalizer.std_eps, 0.02)
+
+    # Verify value network params were loaded correctly
+    loaded_value_params = loaded_params[2]
+    self.assertIn('params', loaded_value_params)
+
+    # Test value network can compute values with loaded params
+    value_output, _ = rnn_ppo_network.value_network.apply(
+        loaded_normalizer,
+        loaded_value_params,
+        jp.zeros((batch_size, 4)),
+        value_hidden,
+    )
+    self.assertEqual(value_output.shape, (batch_size,))
 
 
 if __name__ == '__main__':
