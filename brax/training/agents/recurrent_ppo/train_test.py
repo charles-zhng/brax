@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RNN-PPO tests."""
+"""Recurrent PPO tests."""
 
 import functools
 import pickle
@@ -20,8 +20,8 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from brax import envs
 from brax.training.acme import running_statistics
-from brax.training.agents.rnn_ppo import networks as rnn_ppo_networks
-from brax.training.agents.rnn_ppo import train as rnn_ppo
+from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo import train as rnn_ppo
 import jax
 from jax import numpy as jnp
 

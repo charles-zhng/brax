@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Checkpointing for RNN-PPO."""
+"""Checkpointing for Recurrent PPO."""
 
 from typing import Any, Union
 
 from brax.training import checkpoint
 from brax.training import types
-from brax.training.agents.rnn_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from etils import epath
 from ml_collections import config_dict
 

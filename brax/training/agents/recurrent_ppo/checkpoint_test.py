@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Test RNN-PPO checkpointing."""
+"""Test Recurrent PPO checkpointing."""
 
 import functools
 
 from absl import flags
 from absl.testing import absltest
 from brax.training.acme import running_statistics
-from brax.training.agents.rnn_ppo import checkpoint
-from brax.training.agents.rnn_ppo import losses as rnn_ppo_losses
-from brax.training.agents.rnn_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo import checkpoint
+from brax.training.agents.recurrent_ppo import losses as rnn_ppo_losses
+from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from etils import epath
 import jax
 from jax import numpy as jp

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RNN-PPO losses.
+"""Recurrent PPO losses.
 
 See: https://arxiv.org/pdf/1707.06347.pdf
 """
@@ -21,7 +21,7 @@ from typing import Any, Tuple
 
 from brax.training import types
 from brax.training.agents.ppo import losses as ppo_losses
-from brax.training.agents.rnn_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from brax.training.types import Params
 import flax
 import jax

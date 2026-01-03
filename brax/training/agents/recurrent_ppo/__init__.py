@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RNN-PPO agent with support for Vanilla RNN, GRU, and LSTM cells."""
+"""Recurrent PPO agent with support for Vanilla RNN, GRU, and LSTM cells."""

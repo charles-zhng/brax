@@ -32,9 +32,9 @@ from brax.training import types
 from brax.training.acme import running_statistics
 from brax.training.acme import specs
 from brax.training.agents.ppo import optimizer as ppo_optimizer
-from brax.training.agents.rnn_ppo import checkpoint
-from brax.training.agents.rnn_ppo import losses as rnn_ppo_losses
-from brax.training.agents.rnn_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo import checkpoint
+from brax.training.agents.recurrent_ppo import losses as rnn_ppo_losses
+from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from brax.training.types import Params
 from brax.training.types import PRNGKey
 import flax
