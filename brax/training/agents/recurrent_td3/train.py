@@ -162,7 +162,7 @@ def actor_step_rnn(
 
 def _init_training_state(
     key: PRNGKey,
-    obs_size: int,
+    obs_shape: types.ObservationSize,
     local_devices_to_use: int,
     td3_network: recurrent_td3_networks.RecurrentTD3Networks,
     actor_optimizer: optax.GradientTransformation,
@@ -177,9 +177,7 @@ def _init_training_state(
   q_params = td3_network.q_network.init(key_q)
   q_optimizer_state = q_optimizer.init(q_params)
 
-  normalizer_params = running_statistics.init_state(
-      specs.Array((obs_size,), jnp.dtype('float32'))
-  )
+  normalizer_params = running_statistics.init_state(obs_shape)
 
   training_state = TrainingState(
       actor_optimizer_state=actor_optimizer_state,
@@ -342,10 +340,6 @@ def train(
     )
 
   obs_size = env.observation_size
-  if isinstance(obs_size, Mapping):
-    raise NotImplementedError(
-        'Dictionary observations not yet implemented in recurrent TD3'
-    )
   action_size = env.action_size
 
   # Network setup
@@ -363,8 +357,13 @@ def train(
   actor_optimizer = td3_optimizer.make_optimizer(learning_rate, max_grad_norm)
   q_optimizer = td3_optimizer.make_optimizer(learning_rate, max_grad_norm)
 
-  # Replay buffer
-  dummy_obs = jnp.zeros((obs_size,))
+  # Replay buffer - create dummy observations based on obs_size structure
+  def _make_dummy_obs(obs_size):
+    if isinstance(obs_size, Mapping):
+      return {k: jnp.zeros((v,)) for k, v in obs_size.items()}
+    return jnp.zeros((obs_size,))
+
+  dummy_obs = _make_dummy_obs(obs_size)
   dummy_action = jnp.zeros((action_size,))
   dummy_hidden = td3_network.actor_network.init_hidden(1)
   # Flatten hidden state for storage
@@ -654,9 +653,18 @@ def train(
   global_key, local_key = jax.random.split(rng)
   local_key = jax.random.fold_in(local_key, process_id)
 
+  # Create obs_shape for normalizer - supports dict observations
+  def _make_obs_shape(obs_size):
+    if isinstance(obs_size, Mapping):
+      return {
+          k: specs.Array((v,), jnp.dtype('float32')) for k, v in obs_size.items()
+      }
+    return specs.Array((obs_size,), jnp.dtype('float32'))
+
+  obs_shape = _make_obs_shape(obs_size)
   training_state = _init_training_state(
       key=global_key,
-      obs_size=obs_size,
+      obs_shape=obs_shape,
       local_devices_to_use=local_devices_to_use,
       td3_network=td3_network,
       actor_optimizer=actor_optimizer,

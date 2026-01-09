@@ -309,7 +309,8 @@ def make_recurrent_td3_networks(
   )
 
   # Q-network (feedforward, twin critics)
-  q_network = networks.make_q_network(
+  # Create base Q network with identity preprocessing (we handle it here)
+  base_q_network = networks.make_q_network(
       obs_size=q_obs_size,
       action_size=action_size,
       preprocess_observations_fn=preprocess_observations_fn,
@@ -317,6 +318,20 @@ def make_recurrent_td3_networks(
       activation=activation,
       n_critics=2,
       kernel_init=q_kernel_init,
+  )
+
+  # Wrap Q network to handle dict observations by extracting the right key
+  def q_apply(processor_params, q_params, obs, action):
+    if isinstance(obs, Mapping):
+      # Extract observation and normalizer for Q network's obs_key
+      obs = obs[q_obs_key]
+      processor_params = networks.normalizer_select(processor_params, q_obs_key)
+    # Now pass to base network which will do preprocessing
+    return base_q_network.apply(processor_params, q_params, obs, action)
+
+  q_network = networks.FeedForwardNetwork(
+      init=base_q_network.init,
+      apply=q_apply,
   )
 
   return RecurrentTD3Networks(
