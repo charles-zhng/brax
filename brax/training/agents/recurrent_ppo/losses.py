@@ -15,6 +15,10 @@
 """Recurrent PPO losses.
 
 See: https://arxiv.org/pdf/1707.06347.pdf
+
+Note: This implementation assumes a recurrent policy network and a feedforward
+(non-recurrent) value network. The value network is a standard MLP that processes
+each observation independently.
 """
 
 from typing import Any, Tuple
@@ -30,10 +34,10 @@ import jax.numpy as jnp
 
 @flax.struct.dataclass
 class RNNPPONetworkParams:
-  """Contains training state for the learner."""
+    """Contains training state for the learner."""
 
-  policy: Params
-  value: Params
+    policy: Params
+    value: Params
 
 
 def compute_rnn_ppo_loss(
@@ -51,157 +55,212 @@ def compute_rnn_ppo_loss(
     vf_coefficient: float = 0.5,
     clipping_epsilon_value: float | None = None,
 ) -> Tuple[jnp.ndarray, types.Metrics]:
-  """Computes RNN-PPO loss.
+    """Computes RNN-PPO loss.
 
-  The key difference from standard PPO is that we process sequences with
-  initial hidden states stored in the data extras.
+    The policy network is recurrent (RNN/GRU/LSTM) and processes sequences with
+    initial hidden states stored in the data extras. The value network is a
+    feedforward MLP that processes each observation independently.
 
-  Args:
-    params: Network parameters
-    normalizer_params: Parameters of the normalizer
-    data: Transition data with leading dimension [B, T]. Extra fields required:
-      ['state_extras']['truncation']
-      ['policy_extras']['raw_action']
-      ['policy_extras']['log_prob']
-      ['policy_extras']['initial_policy_hidden']
-      ['policy_extras']['initial_value_hidden']
-    rng: Random key
-    rnn_ppo_network: RNN-PPO networks
-    entropy_cost: Entropy cost coefficient
-    discounting: Discount factor
-    reward_scaling: Reward multiplier
-    gae_lambda: GAE lambda
-    clipping_epsilon: Policy loss clipping epsilon
-    normalize_advantage: Whether to normalize advantage estimate
-    vf_coefficient: Coefficient for value function loss
-    clipping_epsilon_value: Value function loss clipping epsilon
+    Args:
+      params: Network parameters
+      normalizer_params: Parameters of the normalizer
+      data: Transition data with leading dimension [B, T]. Extra fields required:
+        ['state_extras']['truncation']
+        ['policy_extras']['raw_action']
+        ['policy_extras']['log_prob']
+        ['policy_extras']['initial_policy_hidden']
+      rng: Random key
+      rnn_ppo_network: RNN-PPO networks
+      entropy_cost: Entropy cost coefficient
+      discounting: Discount factor
+      reward_scaling: Reward multiplier
+      gae_lambda: GAE lambda
+      clipping_epsilon: Policy loss clipping epsilon
+      normalize_advantage: Whether to normalize advantage estimate
+      vf_coefficient: Coefficient for value function loss
+      clipping_epsilon_value: Value function loss clipping epsilon
 
-  Returns:
-    A tuple (loss, metrics)
-  """
-  parametric_action_distribution = rnn_ppo_network.parametric_action_distribution
-  policy_network = rnn_ppo_network.policy_network
-  value_network = rnn_ppo_network.value_network
+    Returns:
+      A tuple (loss, metrics)
+    """
+    parametric_action_distribution = rnn_ppo_network.parametric_action_distribution
+    policy_network = rnn_ppo_network.policy_network
+    value_network = rnn_ppo_network.value_network
 
-  # Extract initial hidden states BEFORE swapping dimensions
-  # Hidden states are stored at each timestep with shape [B, T, hidden_size]
-  # We need only the first timestep's hidden state: [B, hidden_size]
-  initial_policy_hidden = jax.tree_util.tree_map(
-      lambda x: x[:, 0] if x.ndim > 2 else x,
-      data.extras['policy_extras']['initial_policy_hidden']
-  )
-  initial_value_hidden = jax.tree_util.tree_map(
-      lambda x: x[:, 0] if x.ndim > 2 else x,
-      data.extras['policy_extras']['initial_value_hidden']
-  )
+    def _extract_initial_hidden(hidden):
+        if hidden is None:
+            return None
+        # Hidden states are stored at each timestep with shape [B, T, hidden_size].
+        # We need only the first timestep's hidden state: [B, hidden_size].
+        return jax.tree_util.tree_map(lambda x: x[:, 0] if x.ndim > 2 else x, hidden)
 
-  # Create a version of extras without hidden states for safe swapping
-  policy_extras_for_swap = {
-      k: v for k, v in data.extras['policy_extras'].items()
-      if k not in ('initial_policy_hidden', 'initial_value_hidden',
-                   'policy_hidden', 'value_hidden')
-  }
-  extras_for_swap = {
-      'policy_extras': policy_extras_for_swap,
-      'state_extras': data.extras['state_extras'],
-  }
-  data_for_swap = types.Transition(
-      observation=data.observation,
-      action=data.action,
-      reward=data.reward,
-      discount=data.discount,
-      next_observation=data.next_observation,
-      extras=extras_for_swap,
-  )
+    def _reset_hidden(hidden, done):
+        if hidden is None:
+            return None
+        done_expanded = done[..., None]
+        if rnn_ppo_network.cell_type == "lstm":
+            c, h = hidden
+            c = jnp.where(done_expanded, 0.0, c)
+            h = jnp.where(done_expanded, 0.0, h)
+            return (c, h)
+        return jnp.where(done_expanded, 0.0, hidden)
 
-  # Put the time dimension first: [B, T, ...] -> [T, B, ...]
-  data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), data_for_swap)
+    def _masked_scan_policy(obs_seq, initial_hidden, done_seq):
+        """Process policy network over sequence with hidden state resets on done."""
 
-  # Process entire sequence through policy network
-  # obs shape: [T, B, obs_dim]
-  policy_logits, _ = policy_network.apply_sequence(
-      normalizer_params, params.policy, data.observation, initial_policy_hidden
-  )
+        def step(hidden, inputs):
+            obs_t, done_t = inputs
+            output, new_hidden = policy_network.apply(
+                normalizer_params, params.policy, obs_t, hidden
+            )
+            new_hidden = _reset_hidden(new_hidden, done_t)
+            return new_hidden, output
 
-  # Process entire sequence through value network
-  baseline, _ = value_network.apply_sequence(
-      normalizer_params, params.value, data.observation, initial_value_hidden
-  )
+        _, outputs = jax.lax.scan(step, initial_hidden, (obs_seq, done_seq))
+        return outputs
 
-  # Compute bootstrap value from terminal observation
-  terminal_obs = jax.tree_util.tree_map(lambda x: x[-1], data.next_observation)
-  # Get the final hidden state for value network to use for bootstrap
-  _, final_value_hidden = value_network.apply_sequence(
-      normalizer_params, params.value, data.observation, initial_value_hidden
-  )
-  bootstrap_value, _ = value_network.apply(
-      normalizer_params, params.value, terminal_obs, final_value_hidden
-  )
-
-  rewards = data.reward * reward_scaling
-  truncation = data.extras['state_extras']['truncation']
-  termination = (1 - data.discount) * (1 - truncation)
-
-  target_action_log_probs = parametric_action_distribution.log_prob(
-      policy_logits, data.extras['policy_extras']['raw_action']
-  )
-  behaviour_action_log_probs = data.extras['policy_extras']['log_prob']
-
-  # Use the same GAE computation as regular PPO
-  vs, advantages = ppo_losses.compute_gae(
-      truncation=truncation,
-      termination=termination,
-      rewards=rewards,
-      values=baseline,
-      bootstrap_value=bootstrap_value,
-      lambda_=gae_lambda,
-      discount=discounting,
-  )
-
-  if normalize_advantage:
-    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-  rho_s = jnp.exp(target_action_log_probs - behaviour_action_log_probs)
-
-  surrogate_loss1 = rho_s * advantages
-  surrogate_loss2 = (
-      jnp.clip(rho_s, 1 - clipping_epsilon, 1 + clipping_epsilon) * advantages
-  )
-
-  policy_loss = -jnp.mean(jnp.minimum(surrogate_loss1, surrogate_loss2))
-
-  # Value function loss
-  v_error = vs - baseline
-  v_loss = v_error * v_error
-  if clipping_epsilon_value is not None:
-    old_values = data.extras['policy_extras']['value']
-    v_clipped = old_values + jnp.clip(
-        baseline - old_values, -clipping_epsilon_value, clipping_epsilon_value
+    initial_policy_hidden = _extract_initial_hidden(
+        data.extras["policy_extras"]["initial_policy_hidden"]
     )
-    v_loss_clipped = (vs - v_clipped) ** 2
-    v_loss = jnp.maximum(v_loss, v_loss_clipped)
-  v_loss = jnp.mean(v_loss) * 0.5 * vf_coefficient
+    initial_value_hidden = _extract_initial_hidden(
+        data.extras["policy_extras"].get("initial_value_hidden")
+    )
 
-  # Entropy reward
-  entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
-  entropy_loss = entropy_cost * -entropy
+    # Create a version of extras without hidden states for safe swapping
+    policy_extras_for_swap = {
+        k: v
+        for k, v in data.extras["policy_extras"].items()
+        if k
+        not in (
+            "initial_policy_hidden",
+            "initial_value_hidden",
+            "policy_hidden",
+            "value_hidden",
+        )
+    }
+    extras_for_swap = {
+        "policy_extras": policy_extras_for_swap,
+        "state_extras": data.extras["state_extras"],
+    }
+    data_for_swap = types.Transition(
+        observation=data.observation,
+        action=data.action,
+        reward=data.reward,
+        discount=data.discount,
+        next_observation=data.next_observation,
+        extras=extras_for_swap,
+    )
 
-  total_loss = policy_loss + v_loss + entropy_loss
+    # Put the time dimension first: [B, T, ...] -> [T, B, ...]
+    data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), data_for_swap)
 
-  new_dist = parametric_action_distribution.create_dist(policy_logits)
-  if hasattr(new_dist, 'kl_divergence'):
-    old_dist_params = data.extras['policy_extras']['distribution_params']
-    old_dist = parametric_action_distribution.create_dist(old_dist_params)
-    kl = jnp.mean(new_dist.kl_divergence(old_dist))
-    policy_dist_mean_std = jnp.mean(new_dist.scale)
-  else:
-    kl, policy_dist_mean_std = jnp.array(0.0), jnp.array(0.0)
+    done = data.discount < 0.5
 
-  return total_loss, {
-      'total_loss': total_loss,
-      'policy_loss': policy_loss,
-      'v_loss': v_loss,
-      'entropy_loss': entropy_loss,
-      'kl_mean': kl,
-      'policy_dist_mean_std': policy_dist_mean_std,
-  }
+    # Process policy network over sequence with done-masked hidden resets
+    policy_logits = _masked_scan_policy(
+        data.observation,
+        initial_policy_hidden,
+        done,
+    )
+
+    def _masked_scan_value(obs_seq, initial_hidden, done_seq):
+        """Process value network over sequence with hidden state resets on done."""
+
+        def step(hidden, inputs):
+            obs_t, done_t = inputs
+            output, new_hidden = value_network.apply(
+                normalizer_params, params.value, obs_t, hidden
+            )
+            new_hidden = _reset_hidden(new_hidden, done_t)
+            return new_hidden, output
+
+        final_hidden, outputs = jax.lax.scan(
+            step, initial_hidden, (obs_seq, done_seq)
+        )
+        return outputs, final_hidden
+
+    if initial_value_hidden is None:
+        # Value network is feedforward - apply directly to all observations.
+        # value_network.apply returns (value, hidden) but hidden is unused for MLP.
+        baseline, _ = value_network.apply(
+            normalizer_params, params.value, data.observation, None
+        )
+        final_value_hidden = None
+    else:
+        baseline, final_value_hidden = _masked_scan_value(
+            data.observation, initial_value_hidden, done
+        )
+
+    # Compute bootstrap value from terminal observation
+    terminal_obs = jax.tree_util.tree_map(lambda x: x[-1], data.next_observation)
+    bootstrap_value, _ = value_network.apply(
+        normalizer_params, params.value, terminal_obs, final_value_hidden
+    )
+
+    rewards = data.reward * reward_scaling
+    truncation = data.extras["state_extras"]["truncation"]
+    termination = (1 - data.discount) * (1 - truncation)
+
+    target_action_log_probs = parametric_action_distribution.log_prob(
+        policy_logits, data.extras["policy_extras"]["raw_action"]
+    )
+    behaviour_action_log_probs = data.extras["policy_extras"]["log_prob"]
+
+    # Use the same GAE computation as regular PPO
+    vs, advantages = ppo_losses.compute_gae(
+        truncation=truncation,
+        termination=termination,
+        rewards=rewards,
+        values=baseline,
+        bootstrap_value=bootstrap_value,
+        lambda_=gae_lambda,
+        discount=discounting,
+    )
+
+    if normalize_advantage:
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+    rho_s = jnp.exp(target_action_log_probs - behaviour_action_log_probs)
+
+    surrogate_loss1 = rho_s * advantages
+    surrogate_loss2 = (
+        jnp.clip(rho_s, 1 - clipping_epsilon, 1 + clipping_epsilon) * advantages
+    )
+
+    policy_loss = -jnp.mean(jnp.minimum(surrogate_loss1, surrogate_loss2))
+
+    # Value function loss
+    v_error = vs - baseline
+    v_loss = v_error * v_error
+    if clipping_epsilon_value is not None:
+        old_values = data.extras["policy_extras"]["value"]
+        v_clipped = old_values + jnp.clip(
+            baseline - old_values, -clipping_epsilon_value, clipping_epsilon_value
+        )
+        v_loss_clipped = (vs - v_clipped) ** 2
+        v_loss = jnp.maximum(v_loss, v_loss_clipped)
+    v_loss = jnp.mean(v_loss) * 0.5 * vf_coefficient
+
+    # Entropy reward
+    entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
+    entropy_loss = entropy_cost * -entropy
+
+    total_loss = policy_loss + v_loss + entropy_loss
+
+    new_dist = parametric_action_distribution.create_dist(policy_logits)
+    if hasattr(new_dist, "kl_divergence"):
+        old_dist_params = data.extras["policy_extras"]["distribution_params"]
+        old_dist = parametric_action_distribution.create_dist(old_dist_params)
+        kl = jnp.mean(new_dist.kl_divergence(old_dist))
+        policy_dist_mean_std = jnp.mean(new_dist.scale)
+    else:
+        kl, policy_dist_mean_std = jnp.array(0.0), jnp.array(0.0)
+
+    return total_loss, {
+        "total_loss": total_loss,
+        "policy_loss": policy_loss,
+        "v_loss": v_loss,
+        "entropy_loss": entropy_loss,
+        "kl_mean": kl,
+        "policy_dist_mean_std": policy_dist_mean_std,
+    }
