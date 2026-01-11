@@ -23,6 +23,7 @@ from brax.training.types import PRNGKey
 import flax
 from flax import linen
 import jax
+import jax.numpy as jnp
 
 
 @flax.struct.dataclass
@@ -50,20 +51,27 @@ def make_inference_fn(ppo_networks: PPONetworks, compute_value: bool = False):
         observations: types.Observation, key_sample: PRNGKey
     ) -> Tuple[types.Action, types.Extra]:
       param_subset = (params[0], params[1])  # normalizer and policy params
-      logits = policy_network.apply(*param_subset, observations)
+      key_policy, key_action = jax.random.split(key_sample)
+      logits = policy_network.apply(*param_subset, observations, rng=key_policy)
       if deterministic:
         return ppo_networks.parametric_action_distribution.mode(logits), {}
       raw_actions = parametric_action_distribution.sample_no_postprocessing(
-          logits, key_sample
+          logits, key_action
       )
       log_prob = parametric_action_distribution.log_prob(logits, raw_actions)
       postprocessed_actions = parametric_action_distribution.postprocess(
           raw_actions
       )
+      if log_prob.ndim == 0:
+        batch_shape = (1,)
+      else:
+        batch_shape = log_prob.shape
+      policy_rng = jnp.broadcast_to(key_policy, batch_shape + key_policy.shape)
       extras = {
           'log_prob': log_prob,
           'raw_action': raw_actions,
           'distribution_params': logits,
+          'policy_rng': policy_rng,
       }
       if compute_value:
         extras['value'] = ppo_networks.value_network.apply(

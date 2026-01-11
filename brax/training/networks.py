@@ -91,6 +91,15 @@ class FeedForwardNetwork:
   apply: Callable[..., Any]
 
 
+def _policy_rngs(rng):
+  if rng is None:
+    return None
+  return {
+      'dropout': rng,
+      'policy': jax.random.fold_in(rng, 1),
+  }
+
+
 class MLPHead(linen.Module):
   """MLP over pre-processed latent vectors.
 
@@ -402,14 +411,17 @@ def make_policy_network(
         ' of "normal" or "tanh_normal".'
     )
 
-  def apply(processor_params, policy_params, obs):
+  def apply(processor_params, policy_params, obs, *, rng=None):
     if isinstance(obs, Mapping):
       obs = preprocess_observations_fn(
           obs[obs_key], normalizer_select(processor_params, obs_key)
       )
     else:
       obs = preprocess_observations_fn(obs, processor_params)
-    return policy_module.apply(policy_params, obs)
+    rngs = _policy_rngs(rng)
+    if rngs is None:
+      return policy_module.apply(policy_params, obs)
+    return policy_module.apply(policy_params, obs, rngs=rngs)
 
   obs_size = _get_obs_state_size(obs_size, obs_key)
   dummy_obs = jnp.zeros((1, obs_size))
@@ -585,13 +597,16 @@ def make_policy_network_vision(
       state_obs_key=state_obs_key,
   )
 
-  def apply(processor_params, policy_params, obs):
+  def apply(processor_params, policy_params, obs, *, rng=None):
     if state_obs_key:
       state_obs = preprocess_observations_fn(
           obs[state_obs_key], normalizer_select(processor_params, state_obs_key)
       )
       obs = {**obs, state_obs_key: state_obs}
-    return module.apply(policy_params, obs)
+    rngs = _policy_rngs(rng)
+    if rngs is None:
+      return module.apply(policy_params, obs)
+    return module.apply(policy_params, obs, rngs=rngs)
 
   dummy_obs = {
       key: jnp.zeros((1,) + shape) for key, shape in observation_size.items()
@@ -662,13 +677,16 @@ def make_policy_network_latents(
       state_key=obs_key,
   )
 
-  def apply(processor_params, policy_params, obs):
+  def apply(processor_params, policy_params, obs, *, rng=None):
     if obs_key:
       state_obs = preprocess_observations_fn(
           obs[obs_key], normalizer_select(processor_params, obs_key)
       )
       obs = {**obs, obs_key: state_obs}
-    return module.apply(policy_params, obs)
+    rngs = _policy_rngs(rng)
+    if rngs is None:
+      return module.apply(policy_params, obs)
+    return module.apply(policy_params, obs, rngs=rngs)
 
   if not isinstance(observation_size, Mapping):
     raise NotImplementedError(

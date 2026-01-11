@@ -122,7 +122,8 @@ def compute_ppo_loss(
     normalizer_params: Parameters of the normalizer.
     data: Transition that with leading dimension [B, T]. extra fields required
       are ['state_extras']['truncation'] ['policy_extras']['raw_action']
-      ['policy_extras']['log_prob']
+      ['policy_extras']['log_prob']. If present, ['policy_extras']['policy_rng']
+      is used to replay stochastic policy layers deterministically.
     rng: Random key
     ppo_network: PPO networks.
     entropy_cost: entropy cost.
@@ -144,9 +145,27 @@ def compute_ppo_loss(
 
   # Put the time dimension first.
   data = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), data)
-  policy_logits = policy_apply(
-      normalizer_params, params.policy, data.observation
-  )
+  policy_rng = data.extras['policy_extras'].get('policy_rng')
+
+  if policy_rng is None:
+    policy_logits = policy_apply(
+        normalizer_params, params.policy, data.observation
+    )
+  else:
+    def _apply_policy(obs_t, rng_t):
+      return policy_apply(normalizer_params, params.policy, obs_t, rng=rng_t)
+
+    if policy_rng.ndim == 2:
+      policy_logits = jax.vmap(_apply_policy, in_axes=(0, 0))(
+          data.observation, policy_rng
+      )
+    else:
+      policy_logits = jax.vmap(
+          lambda obs_t, rng_t: jax.vmap(_apply_policy, in_axes=(0, 0))(
+              obs_t, rng_t
+          ),
+          in_axes=(0, 0),
+      )(data.observation, policy_rng)
 
   baseline = value_apply(normalizer_params, params.value, data.observation)
   terminal_obs = jax.tree_util.tree_map(lambda x: x[-1], data.next_observation)
