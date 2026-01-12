@@ -38,6 +38,15 @@ ActivationFn = Callable[[jnp.ndarray], jnp.ndarray]
 Initializer = Callable[..., Any]
 
 
+def _policy_rngs(rng: PRNGKey | None):
+    if rng is None:
+        return None
+    return {
+        "dropout": rng,
+        "policy": jax.random.fold_in(rng, 1),
+    }
+
+
 def get_rnn_cell(
     cell_type: RNNCellType,
     hidden_size: int,
@@ -345,8 +354,9 @@ def make_inference_fn(rnn_ppo_networks: RNNPPONetworks, compute_value: bool = Fa
               Tuple of (actions, extras, new_policy_hidden)
             """
             param_subset = (params[0], params[1])  # normalizer and policy params
+            key_policy, key_action = jax.random.split(key_sample)
             logits, new_policy_hidden = policy_network.apply(
-                *param_subset, observations, policy_hidden
+                *param_subset, observations, policy_hidden, rng=key_policy
             )
 
             if deterministic:
@@ -355,17 +365,25 @@ def make_inference_fn(rnn_ppo_networks: RNNPPONetworks, compute_value: bool = Fa
                 return actions, extras, new_policy_hidden
 
             raw_actions = parametric_action_distribution.sample_no_postprocessing(
-                logits, key_sample
+                logits, key_action
             )
             log_prob = parametric_action_distribution.log_prob(logits, raw_actions)
             postprocessed_actions = parametric_action_distribution.postprocess(
                 raw_actions
+            )
+            if log_prob.ndim == 0:
+                batch_shape = (1,)
+            else:
+                batch_shape = log_prob.shape
+            policy_rng = jnp.broadcast_to(
+                key_policy, batch_shape + key_policy.shape
             )
 
             extras = {
                 "log_prob": log_prob,
                 "raw_action": raw_actions,
                 "distribution_params": logits,
+                "policy_rng": policy_rng,
                 "policy_hidden": new_policy_hidden,
             }
 
@@ -487,7 +505,7 @@ def make_rnn_ppo_networks(
     )
 
     # Policy network functions
-    def policy_apply(processor_params, policy_params, obs, hidden):
+    def policy_apply(processor_params, policy_params, obs, hidden, *, rng=None):
         if isinstance(obs, Mapping):
             obs = preprocess_observations_fn(
                 obs[policy_obs_key],
@@ -495,9 +513,14 @@ def make_rnn_ppo_networks(
             )
         else:
             obs = preprocess_observations_fn(obs, processor_params)
-        return policy_module.apply(policy_params, obs, hidden)
+        rngs = _policy_rngs(rng)
+        if rngs is None:
+            return policy_module.apply(policy_params, obs, hidden)
+        return policy_module.apply(policy_params, obs, hidden, rngs=rngs)
 
-    def policy_apply_sequence(processor_params, policy_params, obs_seq, hidden):
+    def policy_apply_sequence(
+        processor_params, policy_params, obs_seq, hidden, *, rng=None
+    ):
         if isinstance(obs_seq, Mapping):
             obs_seq = preprocess_observations_fn(
                 obs_seq[policy_obs_key],
@@ -505,8 +528,17 @@ def make_rnn_ppo_networks(
             )
         else:
             obs_seq = preprocess_observations_fn(obs_seq, processor_params)
+        rngs = _policy_rngs(rng)
+        if rngs is None:
+            return policy_module.apply(
+                policy_params, obs_seq, hidden, method=policy_module.scan_forward
+            )
         return policy_module.apply(
-            policy_params, obs_seq, hidden, method=policy_module.scan_forward
+            policy_params,
+            obs_seq,
+            hidden,
+            method=policy_module.scan_forward,
+            rngs=rngs,
         )
 
     dummy_obs = jnp.zeros((1, obs_size))
