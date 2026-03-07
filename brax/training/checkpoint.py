@@ -1,4 +1,4 @@
-# Copyright 2025 The Brax Authors.
+# Copyright 2026 The Brax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ _KERNEL_INIT_FN_KEYWORDS = (
     'policy_network_kernel_init_fn',
     'value_network_kernel_init_fn',
     'q_network_kernel_init_fn',
+    'mean_kernel_init_fn',
 )
 
 
@@ -160,6 +161,8 @@ def save(
   # Convert kernel init functions to registered names.
   for init_fn_name in _KERNEL_INIT_FN_KEYWORDS:
     if init_fn_name not in config_cp_dict['network_factory_kwargs']:
+      continue
+    if config_cp_dict['network_factory_kwargs'][init_fn_name] is None:
       continue
     name_ = config_cp_dict['network_factory_kwargs'][init_fn_name].__name__
     if name_ not in networks.KERNEL_INITIALIZER:

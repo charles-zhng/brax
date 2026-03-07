@@ -1,4 +1,4 @@
-# Copyright 2025 The Brax Authors.
+# Copyright 2026 The Brax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -61,6 +61,9 @@ class CheckpointTest(absltest.TestCase):
         policy_network_kernel_init_fn=jax.nn.initializers.orthogonal,
         policy_network_kernel_init_kwargs={"scale": jp.sqrt(2.0)},
         value_network_kernel_init_fn=jax.nn.initializers.glorot_uniform,
+        mean_clip_scale=5.0,
+        mean_kernel_init_fn=jax.nn.initializers.orthogonal,
+        mean_kernel_init_kwargs={"scale": 0.001},
     )
     config = checkpoint.network_config(
         observation_size=1,

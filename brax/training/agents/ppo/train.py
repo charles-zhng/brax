@@ -1,4 +1,4 @@
-# Copyright 2025 The Brax Authors.
+# Copyright 2026 The Brax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -60,7 +60,10 @@ class TrainingState:
 
 
 def _unpmap(v):
-  return jax.tree_util.tree_map(lambda x: x[0], v)
+  # Avoid degraded performance under the new jax.pmap.
+  return jax.tree_util.tree_map(
+      lambda x: x.addressable_shards[0].data.squeeze(0), v
+  )
 
 
 def _strip_weak_type(tree):
@@ -71,26 +74,6 @@ def _strip_weak_type(tree):
     return jnp.astype(leaf, leaf.dtype)
 
   return jax.tree_util.tree_map(f, tree)
-
-
-def _validate_madrona_args(
-    madrona_backend: bool,
-    num_envs: int,
-    num_eval_envs: int,
-    action_repeat: int,
-    eval_env: Optional[envs.Env] = None,
-):
-  """Validates arguments for Madrona-MJX."""
-  if madrona_backend:
-    if eval_env:
-      raise ValueError("Madrona-MJX doesn't support multiple env instances")
-    if num_eval_envs != num_envs:
-      raise ValueError('Madrona-MJX requires a fixed batch size')
-    if action_repeat != 1:
-      raise ValueError(
-          "Implement action_repeat using PipelineEnv's _n_frames to avoid"
-          ' unnecessary rendering!'
-      )
 
 
 def _maybe_wrap_env(
@@ -196,7 +179,7 @@ def train(
     max_devices_per_host: Optional[int] = None,
     # high-level control flow
     wrap_env: bool = True,
-    madrona_backend: bool = False,
+    vision: bool = False,
     augment_pixels: bool = False,
     # environment wrapper
     num_envs: int = 1,
@@ -343,9 +326,12 @@ def train(
     Tuple of (make_policy function, network params, metrics)
   """
   assert batch_size * num_minibatches % num_envs == 0
-  _validate_madrona_args(
-      madrona_backend, num_envs, num_eval_envs, action_repeat, eval_env
-  )
+
+  if vision and action_repeat != 1:
+    raise ValueError(
+        "Implement action_repeat using PipelineEnv's _n_frames to avoid"
+        ' unnecessary rendering!'
+    )
 
   xt = time.time()
 

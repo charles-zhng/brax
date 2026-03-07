@@ -1,4 +1,4 @@
-# Copyright 2025 The Brax Authors.
+# Copyright 2026 The Brax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -101,10 +101,14 @@ def make_ppo_networks(
     policy_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
     value_network_kernel_init_fn: networks.Initializer = jax.nn.initializers.lecun_uniform,
     value_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    mean_clip_scale: float | None = None,
+    mean_kernel_init_fn: networks.Initializer | None = None,
+    mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
 ) -> PPONetworks:
   """Make PPO networks with preprocessor."""
   policy_kernel_init_kwargs = policy_network_kernel_init_kwargs or {}
   value_kernel_init_kwargs = value_network_kernel_init_kwargs or {}
+  mean_kernel_init_kwargs_ = mean_kernel_init_kwargs or {}
 
   parametric_action_distribution: distribution.ParametricDistribution
   if distribution_type == 'normal':
@@ -132,6 +136,11 @@ def make_ppo_networks(
       init_noise_std=init_noise_std,
       state_dependent_std=state_dependent_std,
       kernel_init=policy_network_kernel_init_fn(**policy_kernel_init_kwargs),
+      mean_clip_scale=mean_clip_scale,
+      mean_kernel_init=(
+          mean_kernel_init_fn(**mean_kernel_init_kwargs_)
+          if mean_kernel_init_fn is not None else None
+      ),
   )
   value_network = networks.make_value_network(
       observation_size,
