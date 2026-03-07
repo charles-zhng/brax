@@ -1,3 +1,12 @@
+# My files (DO NOT PUSH)
+outputs/
+slurm-out/
+logs/
+experiments/
+*.md
+slurm.py
+################################
+
 .DS_Store
 .ipynb_checkpoints
 node_modules

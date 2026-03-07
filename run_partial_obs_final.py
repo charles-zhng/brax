@@ -11,6 +11,7 @@ import os
 import time
 import pickle
 import dataclasses
+import argparse
 import pprint
 import yaml
 from datetime import datetime
@@ -21,6 +22,14 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jp
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update(
+    "jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir"
+)
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -37,7 +46,7 @@ from pendulum_partial_obs import PendulumSwingupPartialObs
 
 ENV_NAME = "PendulumSwingup"
 FF_TIMESTEPS = 150_000_000
-RNN_TIMESTEPS = 750_000_000
+RNN_TIMESTEPS = 1_500_000_000
 NUM_EVALS = 40
 SEED = 0
 
@@ -181,7 +190,7 @@ def run_rnn_ppo(
     network_config = {
         "cell_type": "simple",
         "policy_rnn_hidden_size": 64,
-        "policy_output_layer_sizes": (64,),
+        "policy_output_layer_sizes": (),
         "policy_obs_key": "state",  # Partial obs for policy (2D)
         "value_obs_key": "privileged_state",  # Full obs for value function (3D)
     }
@@ -205,14 +214,14 @@ def run_rnn_ppo(
         "unroll_length": 64,
         "num_updates_per_batch": 4,
         "discounting": 0.99,
-        "learning_rate": 1e-3,
+        "learning_rate": 8e-4,
         "entropy_cost": 5e-3,
         "max_grad_norm": 0.5,
         "normalize_advantage": True,
         "clipping_epsilon": 0.1,
-        "num_envs": 2048,
-        "batch_size": 512,
-        "num_minibatches": 16,
+        "num_envs": 1024,
+        "batch_size": 256,
+        "num_minibatches": 8,
         "network_factory": network_factory,
     }
 
@@ -226,7 +235,7 @@ def run_rnn_ppo(
 
     print("\n" + "=" * 70)
     print(f"Experiment: {name}")
-    print(f"  Algorithm: recurrent PPO ({network_config['cell_type']} - vanilla RNN)")
+    print(f"  Algorithm: recurrent PPO ({network_config['cell_type']})")
     print(f"  Observation size: {env.observation_size}")
     print(f"  Timesteps: {num_timesteps}")
     print(
@@ -293,6 +302,10 @@ def run_rnn_ppo(
 
 def plot_results(results: List[Dict], output_dir: str):
     """Generate comparison plots."""
+    if not results:
+        print("No results to plot.")
+        return
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     colors = {
@@ -313,17 +326,20 @@ def plot_results(results: List[Dict], output_dir: str):
         rewards = [m["reward"] for m in result["metrics"]]
         stds = [m["reward_std"] for m in result["metrics"]]
 
-        label = labels[name]
+        label = labels.get(name, name)
         if "num_timesteps" in result:
             label += f" ({result['num_timesteps']:,} steps)"
 
-        ax.plot(steps, rewards, color=colors[name], lw=2, label=label)
+        color = colors.get(name)
+        if color is None:
+            color = f"C{len(ax.lines)}"
+        ax.plot(steps, rewards, color=color, lw=2, label=label)
         ax.fill_between(
             steps,
             np.array(rewards) - np.array(stds),
             np.array(rewards) + np.array(stds),
             alpha=0.2,
-            color=colors[name],
+            color=color,
         )
 
     ax.set_xlabel("Environment Steps", fontsize=12)
@@ -338,7 +354,7 @@ def plot_results(results: List[Dict], output_dir: str):
     names = [r["name"] for r in results]
     final_rewards = [r["final_reward"] for r in results]
     peak_rewards = [r["peak_reward"] for r in results]
-    bar_colors = [colors[n] for n in names]
+    bar_colors = [colors.get(n, f"C{i}") for i, n in enumerate(names)]
 
     x = np.arange(len(names))
     width = 0.35
@@ -385,7 +401,20 @@ def plot_results(results: List[Dict], output_dir: str):
     print(f"Saved plots to {output_dir}/partial_obs_final.png")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run partial observation experiments with optional FF PPO."
+    )
+    parser.add_argument(
+        "--run-ff",
+        action="store_true",
+        help="Also run FF PPO with full observation control.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = _parse_args()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join("outputs", f"partial_obs_final_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
@@ -395,6 +424,7 @@ def main():
     print("=" * 70)
     print(f"Seed: {SEED}")
     print(f"Output: {output_dir}")
+    print(f"Run FF PPO: {args.run_ff}")
     print("=" * 70)
 
     # Load environments
@@ -413,11 +443,16 @@ def main():
 
     results = []
 
-    # 1. FF PPO with Full Obs (control)
-    result = run_ff_ppo(
-        full_obs_env, "FF_full_obs", rl_config, output_dir, num_timesteps=FF_TIMESTEPS
-    )
-    results.append(result)
+    # 1. FF PPO with Full Obs (control) - optional
+    if args.run_ff:
+        result = run_ff_ppo(
+            full_obs_env,
+            "FF_full_obs",
+            rl_config,
+            output_dir,
+            num_timesteps=FF_TIMESTEPS,
+        )
+        results.append(result)
 
     # 2. RNN PPO with Partial Obs
     result = run_rnn_ppo(
@@ -450,14 +485,16 @@ def main():
         )
     print("=" * 70)
 
-    ff_full = next(r for r in results if r["name"] == "FF_full_obs")
     rnn_partial = next(r for r in results if r["name"] == "RNN_partial_obs")
-
     print("\nKey Findings:")
-    print(f"  FF full obs peak: {ff_full['peak_reward']:.0f}")
-    print(
-        f"  RNN partial obs peak: {rnn_partial['peak_reward']:.0f} (should match FF full)"
-    )
+    if args.run_ff:
+        ff_full = next(r for r in results if r["name"] == "FF_full_obs")
+        print(f"  FF full obs peak: {ff_full['peak_reward']:.0f}")
+        print(
+            f"  RNN partial obs peak: {rnn_partial['peak_reward']:.0f} (should match FF full)"
+        )
+    else:
+        print(f"  RNN partial obs peak: {rnn_partial['peak_reward']:.0f}")
 
     print(f"\nResults saved to: {output_dir}/")
 
