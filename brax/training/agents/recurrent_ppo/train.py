@@ -61,7 +61,10 @@ class TrainingState:
 
 
 def _unpmap(v):
-    return jax.tree_util.tree_map(lambda x: x[0], v)
+    # Avoid degraded performance under the new jax.pmap.
+    return jax.tree_util.tree_map(
+        lambda x: x.addressable_shards[0].data.squeeze(0), v
+    )
 
 
 def _strip_weak_type(tree):

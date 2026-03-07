@@ -89,6 +89,7 @@ class RecurrentMLP(linen.Module):
     Processes input through:
     1. RNN cell (obs -> hidden)
     2. Output MLP layers
+    3. Optional separate mean output layer with configurable init and clipping
     """
 
     rnn_hidden_size: int
@@ -96,17 +97,37 @@ class RecurrentMLP(linen.Module):
     cell_type: RNNCellType = "gru"
     activation: ActivationFn = linen.relu
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform()
+    mean_clip_scale: float | None = None
+    mean_kernel_init: Initializer | None = None
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
             self.cell_type, self.rnn_hidden_size, self.kernel_init
         )
-        self.output_mlp = networks.MLP(
-            layer_sizes=list(self.output_layer_sizes),
-            activation=self.activation,
-            kernel_init=self.kernel_init,
-            activate_final=False,
-        )
+        # If mean_kernel_init or mean_clip_scale is set, split off the final
+        # layer so it can use a different initializer / clipping.
+        if self.mean_kernel_init is not None or self.mean_clip_scale is not None:
+            self.output_mlp = networks.MLP(
+                layer_sizes=list(self.output_layer_sizes[:-1]),
+                activation=self.activation,
+                kernel_init=self.kernel_init,
+                activate_final=True,
+            )
+            mean_kernel_init = (
+                self.mean_kernel_init if self.mean_kernel_init is not None
+                else self.kernel_init
+            )
+            self.mean_layer = linen.Dense(
+                self.output_layer_sizes[-1], kernel_init=mean_kernel_init
+            )
+        else:
+            self.output_mlp = networks.MLP(
+                layer_sizes=list(self.output_layer_sizes),
+                activation=self.activation,
+                kernel_init=self.kernel_init,
+                activate_final=False,
+            )
+            self.mean_layer = None
 
     def __call__(
         self, obs: jnp.ndarray, hidden: HiddenState
@@ -127,6 +148,10 @@ class RecurrentMLP(linen.Module):
         else:
             rnn_output = new_hidden
         output = self.output_mlp(rnn_output)
+        if self.mean_layer is not None:
+            output = self.mean_layer(output)
+        if self.mean_clip_scale is not None:
+            output = self.mean_clip_scale * (output / (1.0 + jnp.abs(output)))
         return output, new_hidden
 
     def scan_forward(
@@ -162,6 +187,8 @@ class RecurrentPolicyModule(linen.Module):
     noise_std_type: Literal["scalar", "log"] = "scalar"
     init_noise_std: float = 1.0
     state_dependent_std: bool = False
+    mean_clip_scale: float | None = None
+    mean_kernel_init: Initializer | None = None
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -171,7 +198,11 @@ class RecurrentPolicyModule(linen.Module):
             activation=self.activation,
             kernel_init=self.kernel_init,
         )
-        self.mean_layer = linen.Dense(self.param_size, kernel_init=self.kernel_init)
+        mean_kernel_init = (
+            self.mean_kernel_init if self.mean_kernel_init is not None
+            else self.kernel_init
+        )
+        self.mean_layer = linen.Dense(self.param_size, kernel_init=mean_kernel_init)
 
         if self.state_dependent_std:
             self.std_layer = linen.Dense(self.param_size, kernel_init=self.kernel_init)
@@ -199,6 +230,8 @@ class RecurrentPolicyModule(linen.Module):
         """
         features, new_hidden = self.recurrent_mlp(obs, hidden)
         mean = self.mean_layer(features)
+        if self.mean_clip_scale is not None:
+            mean = self.mean_clip_scale * (mean / (1.0 + jnp.abs(mean)))
 
         if self.state_dependent_std:
             log_std = self.std_layer(features)
@@ -422,6 +455,9 @@ def make_rnn_ppo_networks(
     policy_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
     value_network_kernel_init_fn: Initializer = jax.nn.initializers.lecun_uniform,
     value_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    mean_clip_scale: float | None = None,
+    mean_kernel_init_fn: Initializer | None = None,
+    mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
 ) -> RNNPPONetworks:
     """Make RNN-PPO networks with preprocessor.
 
@@ -453,8 +489,13 @@ def make_rnn_ppo_networks(
     """
     policy_kernel_init_kwargs = policy_network_kernel_init_kwargs or {}
     value_kernel_init_kwargs = value_network_kernel_init_kwargs or {}
+    mean_kernel_init_kwargs_ = mean_kernel_init_kwargs or {}
     policy_kernel_init = policy_network_kernel_init_fn(**policy_kernel_init_kwargs)
     value_kernel_init = value_network_kernel_init_fn(**value_kernel_init_kwargs)
+    mean_kernel_init = (
+        mean_kernel_init_fn(**mean_kernel_init_kwargs_)
+        if mean_kernel_init_fn is not None else None
+    )
 
     parametric_action_distribution: distribution.ParametricDistribution
     if distribution_type == "normal":
@@ -484,6 +525,8 @@ def make_rnn_ppo_networks(
             cell_type=cell_type,
             activation=activation,
             kernel_init=policy_kernel_init,
+            mean_clip_scale=mean_clip_scale,
+            mean_kernel_init=mean_kernel_init,
         )
     else:
         # For normal distribution, use the policy module with std
@@ -497,6 +540,8 @@ def make_rnn_ppo_networks(
             noise_std_type=noise_std_type,
             init_noise_std=init_noise_std,
             state_dependent_std=state_dependent_std,
+            mean_clip_scale=mean_clip_scale,
+            mean_kernel_init=mean_kernel_init,
         )
 
     # Create value module (standard MLP, non-recurrent)
