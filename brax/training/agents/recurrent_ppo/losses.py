@@ -69,6 +69,8 @@ def compute_rnn_ppo_loss(
         ['policy_extras']['raw_action']
         ['policy_extras']['log_prob']
         ['policy_extras']['initial_policy_hidden']
+        If present, ['policy_extras']['policy_rng'] is used to replay stochastic
+        policy layers deterministically.
       rng: Random key
       rnn_ppo_network: RNN-PPO networks
       entropy_cost: Entropy cost coefficient
@@ -105,18 +107,48 @@ def compute_rnn_ppo_loss(
             return (c, h)
         return jnp.where(done_expanded, 0.0, hidden)
 
-    def _masked_scan_policy(obs_seq, initial_hidden, done_seq):
+    def _masked_scan_policy(obs_seq, initial_hidden, done_seq, policy_rng_seq=None):
         """Process policy network over sequence with hidden state resets on done."""
 
         def step(hidden, inputs):
-            obs_t, done_t = inputs
-            output, new_hidden = policy_network.apply(
-                normalizer_params, params.policy, obs_t, hidden
-            )
+            if policy_rng_seq is None:
+                obs_t, done_t = inputs
+                output, new_hidden = policy_network.apply(
+                    normalizer_params, params.policy, obs_t, hidden
+                )
+            else:
+                obs_t, done_t, rng_t = inputs
+                if rng_t.ndim == 1:
+                    output, new_hidden = policy_network.apply(
+                        normalizer_params,
+                        params.policy,
+                        obs_t,
+                        hidden,
+                        rng=rng_t,
+                    )
+                else:
+
+                    def _apply_policy(obs_b, hidden_b, rng_b):
+                        return policy_network.apply(
+                            normalizer_params,
+                            params.policy,
+                            obs_b,
+                            hidden_b,
+                            rng=rng_b,
+                        )
+
+                    output, new_hidden = jax.vmap(_apply_policy, in_axes=(0, 0, 0))(
+                        obs_t, hidden, rng_t
+                    )
             new_hidden = _reset_hidden(new_hidden, done_t)
             return new_hidden, output
 
-        _, outputs = jax.lax.scan(step, initial_hidden, (obs_seq, done_seq))
+        if policy_rng_seq is None:
+            _, outputs = jax.lax.scan(step, initial_hidden, (obs_seq, done_seq))
+        else:
+            _, outputs = jax.lax.scan(
+                step, initial_hidden, (obs_seq, done_seq, policy_rng_seq)
+            )
         return outputs
 
     initial_policy_hidden = _extract_initial_hidden(
@@ -156,11 +188,22 @@ def compute_rnn_ppo_loss(
 
     done = data.discount < 0.5
 
+    policy_rng = data.extras["policy_extras"].get("policy_rng")
+    if policy_rng is not None:
+        # policy_rng is stored with a batch dimension for shape consistency,
+        # but rollout used a single key for the entire batch. Collapse back
+        # to one key per timestep so replay matches the original RNG usage.
+        if policy_rng.ndim == 3:
+            policy_rng = policy_rng[:, 0]
+        elif policy_rng.ndim == 2:
+            policy_rng = policy_rng[0]
+
     # Process policy network over sequence with done-masked hidden resets
     policy_logits = _masked_scan_policy(
         data.observation,
         initial_policy_hidden,
         done,
+        policy_rng,
     )
 
     def _masked_scan_value(obs_seq, initial_hidden, done_seq):
@@ -174,9 +217,7 @@ def compute_rnn_ppo_loss(
             new_hidden = _reset_hidden(new_hidden, done_t)
             return new_hidden, output
 
-        final_hidden, outputs = jax.lax.scan(
-            step, initial_hidden, (obs_seq, done_seq)
-        )
+        final_hidden, outputs = jax.lax.scan(step, initial_hidden, (obs_seq, done_seq))
         return outputs, final_hidden
 
     if initial_value_hidden is None:
