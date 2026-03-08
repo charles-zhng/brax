@@ -14,15 +14,88 @@
 
 """Checkpointing for Recurrent PPO."""
 
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 from brax.training import checkpoint
 from brax.training import types
 from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from etils import epath
+import jax
 from ml_collections import config_dict
 
 _CONFIG_FNAME = 'rnn_ppo_network_config.json'
+
+
+def _infer_batch_size(
+    observations: types.Observation,
+    observation_size: types.ObservationSize,
+) -> int:
+  """Infers the observation batch size for hidden-state initialization."""
+  obs_leaf = jax.tree_util.tree_leaves(observations)[0]
+  size_leaf = jax.tree_util.tree_leaves(
+      observation_size, is_leaf=lambda x: isinstance(x, (tuple, list))
+  )[0]
+  expected_shape = (size_leaf,) if isinstance(size_leaf, int) else tuple(size_leaf)
+  if obs_leaf.shape == expected_shape:
+    return 1
+  if obs_leaf.shape[1:] == expected_shape:
+    return obs_leaf.shape[0]
+  raise ValueError(
+      'Could not infer batch size from observations with shape '
+      f'{obs_leaf.shape} and checkpoint observation size {expected_shape}.'
+  )
+
+
+def _unwrap_policy_hidden(policy_hidden: Any) -> Any:
+  """Unwraps a `(policy_hidden, value_hidden)` tuple from legacy callers."""
+  if (
+      isinstance(policy_hidden, tuple)
+      and len(policy_hidden) == 2
+      and policy_hidden[1] is None
+  ):
+    return policy_hidden[0]
+  return policy_hidden
+
+
+class RecurrentCheckpointPolicy:
+  """Callable recurrent policy loaded from a checkpoint.
+
+  Supports both `policy(obs, key)` for one-off inference and
+  `policy(obs, policy_hidden, key)` for explicit recurrent-state management.
+  """
+
+  def __init__(
+      self,
+      policy: Callable[..., Any],
+      rnn_ppo_network: rnn_ppo_networks.RNNPPONetworks,
+      observation_size: types.ObservationSize,
+  ):
+    self._policy = policy
+    self._rnn_ppo_network = rnn_ppo_network
+    self._observation_size = observation_size
+
+  def init_hidden(self, batch_size: int) -> rnn_ppo_networks.HiddenState:
+    return self._rnn_ppo_network.policy_network.init_hidden(batch_size)
+
+  def __call__(
+      self,
+      observations: types.Observation,
+      key_or_hidden: Any,
+      key_sample: types.PRNGKey | None = None,
+  ):
+    if key_sample is None:
+      key_sample = key_or_hidden
+      policy_hidden = self.init_hidden(
+          _infer_batch_size(observations, self._observation_size)
+      )
+    else:
+      policy_hidden = _unwrap_policy_hidden(key_or_hidden)
+      if policy_hidden is None:
+        policy_hidden = self.init_hidden(
+            _infer_batch_size(observations, self._observation_size)
+        )
+
+    return self._policy(observations, policy_hidden, key_sample)
 
 
 def save(
@@ -78,11 +151,21 @@ def load_policy(
     ] = rnn_ppo_networks.make_rnn_ppo_networks,
     deterministic: bool = True,
 ):
-  """Loads policy inference function from RNN-PPO checkpoint."""
+  """Loads policy inference from an RNN-PPO checkpoint.
+
+  The returned callable supports both `policy(observations, key)` and
+  `policy(observations, policy_hidden, key)`. It also exposes
+  `policy.init_hidden(batch_size)` for explicit hidden-state management.
+  """
   path = epath.Path(path)
   config = load_config(path)
   params = load(path)
   rnn_ppo_network = _get_rnn_ppo_network(config, network_factory)
   make_inference_fn = rnn_ppo_networks.make_inference_fn(rnn_ppo_network)
+  policy = make_inference_fn(params, deterministic=deterministic)
 
-  return make_inference_fn(params, deterministic=deterministic)
+  return RecurrentCheckpointPolicy(
+      policy,
+      rnn_ppo_network,
+      config.to_dict()['observation_size'],
+  )

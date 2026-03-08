@@ -106,14 +106,19 @@ class CheckpointTest(absltest.TestCase):
         epath.Path(path.full_path) / '000000000001',
     )
 
-    # Test that policy works with hidden states
     batch_size = 1
-    policy_hidden = rnn_ppo_network.policy_network.init_hidden(batch_size)
+
+    # Direct checkpoint inference should auto-initialize hidden state.
+    out = policy_fn(jp.zeros((batch_size, 4)), jax.random.PRNGKey(0))
+    self.assertEqual(out[0].shape, (batch_size, 2))
+
+    # Explicit recurrent-state management should also work.
+    policy_hidden = policy_fn.init_hidden(batch_size)
     value_hidden = rnn_ppo_network.value_network.init_hidden(batch_size)
     hidden_states = (policy_hidden, value_hidden)
 
     out = policy_fn(jp.zeros((batch_size, 4)), hidden_states, jax.random.PRNGKey(0))
-    # out is (action, extras, new_hidden_states)
+    # out is (action, extras, new_policy_hidden)
     self.assertEqual(out[0].shape, (batch_size, 2))
 
     loaded_params = checkpoint.load(epath.Path(path.full_path) / '000000000001')

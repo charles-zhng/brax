@@ -99,6 +99,7 @@ class RecurrentMLP(linen.Module):
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform()
     mean_clip_scale: float | None = None
     mean_kernel_init: Initializer | None = None
+    activate_final: bool = True
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
@@ -125,7 +126,7 @@ class RecurrentMLP(linen.Module):
                 layer_sizes=list(self.output_layer_sizes),
                 activation=self.activation,
                 kernel_init=self.kernel_init,
-                activate_final=False,
+                activate_final=self.activate_final,
             )
             self.mean_layer = None
 
@@ -525,6 +526,7 @@ def make_rnn_ppo_networks(
             cell_type=cell_type,
             activation=activation,
             kernel_init=policy_kernel_init,
+            activate_final=False,
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
         )
