@@ -172,6 +172,40 @@ class NormalTanhDistribution(ParametricDistribution):
     return _NormalDistribution(loc=loc, scale=scale)
 
 
+class SigmoidBijector:
+  """Sigmoid Bijector. Maps (-inf, inf) -> (0, 1)."""
+
+  def forward(self, x):
+    return jax.nn.sigmoid(x)
+
+  def inverse(self, y):
+    return jnp.log(y / (1.0 - y + 1e-8) + 1e-8)
+
+  def forward_log_det_jacobian(self, x):
+    # log |d sigmoid/dx| = log(sigmoid(x) * (1 - sigmoid(x)))
+    #                    = -softplus(-x) - softplus(x)
+    return -jax.nn.softplus(-x) - jax.nn.softplus(x)
+
+
+class NormalSigmoidDistribution(ParametricDistribution):
+  """Normal distribution followed by sigmoid. Actions in (0, 1)."""
+
+  def __init__(self, event_size, min_std=0.001, var_scale=1):
+    super().__init__(
+        param_size=2 * event_size,
+        postprocessor=SigmoidBijector(),
+        event_ndims=1,
+        reparametrizable=True,
+    )
+    self._min_std = min_std
+    self._var_scale = var_scale
+
+  def create_dist(self, parameters):
+    loc, scale = jnp.split(parameters, 2, axis=-1)
+    scale = (jax.nn.softplus(scale) + self._min_std) * self._var_scale
+    return _NormalDistribution(loc=loc, scale=scale)
+
+
 class IdentityPostprocessor:
   """Identity postprocessor."""
 

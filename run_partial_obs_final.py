@@ -46,7 +46,7 @@ from pendulum_partial_obs import PendulumSwingupPartialObs
 
 ENV_NAME = "PendulumSwingup"
 FF_TIMESTEPS = 150_000_000
-RNN_TIMESTEPS = 1_500_000_000
+RNN_TIMESTEPS = 200_000_000
 NUM_EVALS = 40
 SEED = 0
 
@@ -214,14 +214,14 @@ def run_rnn_ppo(
         "unroll_length": 64,
         "num_updates_per_batch": 4,
         "discounting": 0.99,
-        "learning_rate": 8e-4,
-        "entropy_cost": 5e-3,
+        "learning_rate": 3e-4,
+        "entropy_cost": 1e-2,
         "max_grad_norm": 0.5,
         "normalize_advantage": True,
         "clipping_epsilon": 0.1,
-        "num_envs": 1024,
-        "batch_size": 256,
-        "num_minibatches": 8,
+        "num_envs": 4096,
+        "batch_size": 1024,
+        "num_minibatches": 16,
         "network_factory": network_factory,
     }
 

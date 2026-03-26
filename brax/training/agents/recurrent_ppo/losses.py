@@ -54,6 +54,7 @@ def compute_rnn_ppo_loss(
     normalize_advantage: bool = True,
     vf_coefficient: float = 0.5,
     clipping_epsilon_value: float | None = None,
+    feature_gamma: float = 1.0,
 ) -> Tuple[jnp.ndarray, types.Metrics]:
     """Computes RNN-PPO loss.
 
@@ -270,7 +271,7 @@ def compute_rnn_ppo_loss(
 
     policy_loss = -jnp.mean(jnp.minimum(surrogate_loss1, surrogate_loss2))
 
-    # Value function loss
+    # Value function loss (unscaled by gamma — separate network)
     v_error = vs - baseline
     v_loss = v_error * v_error
     if clipping_epsilon_value is not None:
@@ -285,6 +286,12 @@ def compute_rnn_ppo_loss(
     # Entropy reward
     entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
     entropy_loss = entropy_cost * -entropy
+
+    # Feature-learning gamma: scale policy + entropy losses by gamma^2
+    # (both flow through the policy network; value loss is a separate MLP)
+    _gamma_sq = feature_gamma ** 2
+    policy_loss = policy_loss * _gamma_sq
+    entropy_loss = entropy_loss * _gamma_sq
 
     total_loss = policy_loss + v_loss + entropy_loss
 

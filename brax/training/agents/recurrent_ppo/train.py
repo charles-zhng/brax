@@ -462,6 +462,7 @@ def train(
     restore_params: Optional[Any] = None,
     restore_value_fn: bool = True,
     run_evals: bool = True,
+    feature_gamma: float = 1.0,
 ):
     """RNN-PPO training.
 
@@ -634,6 +635,7 @@ def train(
         normalize_advantage=normalize_advantage,
         vf_coefficient=vf_loss_coefficient,
         clipping_epsilon_value=clipping_epsilon_value,
+        feature_gamma=feature_gamma,
     )
 
     loss_and_pgrad_fn = gradients.loss_and_pgrad(
