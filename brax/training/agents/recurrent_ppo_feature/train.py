@@ -32,9 +32,9 @@ from brax.training import types
 from brax.training.acme import running_statistics
 from brax.training.acme import specs
 from brax.training.agents.ppo import optimizer as ppo_optimizer
-from brax.training.agents.recurrent_ppo import checkpoint
-from brax.training.agents.recurrent_ppo import losses as rnn_ppo_losses
-from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo_feature import checkpoint
+from brax.training.agents.recurrent_ppo_feature import losses as rnn_ppo_losses
+from brax.training.agents.recurrent_ppo_feature import networks as rnn_ppo_networks
 from brax.training.types import Params
 from brax.training.types import PRNGKey
 import flax
@@ -462,6 +462,8 @@ def train(
     restore_params: Optional[Any] = None,
     restore_value_fn: bool = True,
     run_evals: bool = True,
+    feature_gamma: float = 1.0,
+    weight_decay: float = 0.0,
 ):
     """RNN-PPO training.
 
@@ -634,6 +636,8 @@ def train(
         normalize_advantage=normalize_advantage,
         vf_coefficient=vf_loss_coefficient,
         clipping_epsilon_value=clipping_epsilon_value,
+        feature_gamma=feature_gamma,
+        weight_decay=weight_decay,
     )
 
     loss_and_pgrad_fn = gradients.loss_and_pgrad(

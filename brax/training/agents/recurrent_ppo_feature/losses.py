@@ -25,7 +25,7 @@ from typing import Any, Tuple
 
 from brax.training import types
 from brax.training.agents.ppo import losses as ppo_losses
-from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
+from brax.training.agents.recurrent_ppo_feature import networks as rnn_ppo_networks
 from brax.training.types import Params
 import flax
 import jax
@@ -54,6 +54,8 @@ def compute_rnn_ppo_loss(
     normalize_advantage: bool = True,
     vf_coefficient: float = 0.5,
     clipping_epsilon_value: float | None = None,
+    feature_gamma: float = 1.0,
+    weight_decay: float = 0.0,
 ) -> Tuple[jnp.ndarray, types.Metrics]:
     """Computes RNN-PPO loss.
 
@@ -270,7 +272,7 @@ def compute_rnn_ppo_loss(
 
     policy_loss = -jnp.mean(jnp.minimum(surrogate_loss1, surrogate_loss2))
 
-    # Value function loss
+    # Value function loss (unscaled by gamma — separate network)
     v_error = vs - baseline
     v_loss = v_error * v_error
     if clipping_epsilon_value is not None:
@@ -286,7 +288,20 @@ def compute_rnn_ppo_loss(
     entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
     entropy_loss = entropy_cost * -entropy
 
-    total_loss = policy_loss + v_loss + entropy_loss
+    # Feature-learning gamma: scale policy + entropy losses by gamma^2
+    # (both flow through the policy network; value loss is a separate MLP)
+    _gamma_sq = feature_gamma ** 2
+    policy_loss = policy_loss * _gamma_sq
+    entropy_loss = entropy_loss * _gamma_sq
+
+    weight_decay_loss = jnp.array(0.0)
+    if weight_decay:
+        weight_decay_loss = 0.5 * weight_decay * sum(
+            jnp.sum(jnp.square(leaf))
+            for leaf in jax.tree_util.tree_leaves(params.policy)
+        )
+
+    total_loss = policy_loss + v_loss + entropy_loss + weight_decay_loss
 
     new_dist = parametric_action_distribution.create_dist(policy_logits)
     if hasattr(new_dist, "kl_divergence"):
@@ -302,6 +317,7 @@ def compute_rnn_ppo_loss(
         "policy_loss": policy_loss,
         "v_loss": v_loss,
         "entropy_loss": entropy_loss,
+        "weight_decay_loss": weight_decay_loss,
         "kl_mean": kl,
         "policy_dist_mean_std": policy_dist_mean_std,
     }
