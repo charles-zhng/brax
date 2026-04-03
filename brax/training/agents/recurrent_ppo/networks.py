@@ -448,7 +448,7 @@ def make_rnn_ppo_networks(
     activation: ActivationFn = linen.swish,
     policy_obs_key: str = "state",
     value_obs_key: str = "state",
-    distribution_type: Literal["normal", "tanh_normal"] = "tanh_normal",
+    distribution_type: Literal["normal", "tanh_normal", "sigmoid_normal"] = "tanh_normal",
     noise_std_type: Literal["scalar", "log"] = "scalar",
     init_noise_std: float = 1.0,
     state_dependent_std: bool = False,
@@ -507,18 +507,22 @@ def make_rnn_ppo_networks(
         parametric_action_distribution = distribution.NormalTanhDistribution(
             event_size=action_size
         )
+    elif distribution_type == "sigmoid_normal":
+        parametric_action_distribution = distribution.NormalSigmoidDistribution(
+            event_size=action_size
+        )
     else:
         raise ValueError(
             f"Unsupported distribution type: {distribution_type}. Must be one"
-            ' of "normal" or "tanh_normal".'
+            ' of "normal", "tanh_normal", or "sigmoid_normal".'
         )
 
     obs_size = _get_obs_state_size(observation_size, policy_obs_key)
     value_obs_size = _get_obs_state_size(observation_size, value_obs_key)
 
     # Create policy module
-    if distribution_type == "tanh_normal":
-        # For tanh_normal, we output the full param_size (means only, std learned separately)
+    if distribution_type in ("tanh_normal", "sigmoid_normal"):
+        # For tanh_normal/sigmoid_normal, we output the full param_size (means only, std learned separately)
         policy_module = RecurrentMLP(
             rnn_hidden_size=policy_rnn_hidden_size,
             output_layer_sizes=list(policy_output_layer_sizes)
