@@ -391,8 +391,8 @@ def train(
     if normalize_observations:
         normalize_fn = running_statistics.normalize
     recurrent_sac_network = network_factory(
-        observation_size=env.observation_size,
-        action_size=env.action_size,
+        env.observation_size,
+        env.action_size,
         preprocess_observations_fn=normalize_fn,
     )
     make_policy = recurrent_sac_networks.make_inference_fn(recurrent_sac_network)
