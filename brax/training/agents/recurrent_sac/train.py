@@ -714,21 +714,23 @@ def train(
     # -- Init training state + buffer + env + eval ------------------------
     global_key, local_key = jax.random.split(rng)
     local_key = jax.random.fold_in(local_key, process_id)
+    local_key, rb_key, env_key, eval_key = jax.random.split(local_key, 4)
 
-    # Observation spec for the normalizer — per-sample shape.
-    env_state_example = None
-
-    def _single_reset(key_):
-        return env.reset(key_)
-
-    single_reset_fn = jax.jit(_single_reset)
-    key_env_shape, local_key = jax.random.split(local_key)
-    dummy_state = single_reset_fn(key_env_shape)
-    per_sample_obs_shape = jax.tree_util.tree_map(
-        lambda x: specs.Array(x.shape[1:], jnp.dtype("float32")),
-        dummy_state.obs,
+    # Env init — per-device reset. Do this first so we can derive the
+    # per-sample observation shape from the resulting env_state.obs.
+    env_keys = jax.random.split(env_key, num_envs // jax.process_count())
+    env_keys = jnp.reshape(
+        env_keys, (local_devices_to_use, -1) + env_keys.shape[1:]
     )
-    del dummy_state
+    env_state = jax.pmap(env.reset)(env_keys)
+
+    # env_state.obs has shape [local_devices, envs_per_device, *obs_shape].
+    # Drop the two leading dims to get the per-sample obs shape for the
+    # running-statistics normalizer.
+    per_sample_obs_shape = jax.tree_util.tree_map(
+        lambda x: specs.Array(x.shape[2:], jnp.dtype("float32")),
+        env_state.obs,
+    )
 
     training_state = _init_training_state(
         key=global_key,
@@ -742,15 +744,6 @@ def train(
         normalize_observations_mode=normalize_observations_mode,
     )
     del global_key
-
-    local_key, rb_key, env_key, eval_key = jax.random.split(local_key, 4)
-
-    # Env init — per-device reset.
-    env_keys = jax.random.split(env_key, num_envs // jax.process_count())
-    env_keys = jnp.reshape(
-        env_keys, (local_devices_to_use, -1) + env_keys.shape[1:]
-    )
-    env_state = jax.pmap(env.reset)(env_keys)
 
     # Replay buffer init per device.
     buffer_state = jax.pmap(replay_buffer.init)(
