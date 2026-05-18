@@ -122,7 +122,7 @@ def make_recurrent_sac_networks(
     activation: ActivationFn = linen.relu,
     policy_obs_key: str = "state",
     q_obs_key: str = "state",
-    distribution_type: Literal["normal", "tanh_normal"] = "tanh_normal",
+    distribution_type: Literal["normal", "tanh_normal", "sigmoid_normal"] = "tanh_normal",
     noise_std_type: Literal["scalar", "log"] = "scalar",
     init_noise_std: float = 1.0,
     state_dependent_std: bool = False,
@@ -194,17 +194,24 @@ def make_recurrent_sac_networks(
         parametric_action_distribution = distribution.NormalTanhDistribution(
             event_size=action_size
         )
+    elif distribution_type == "sigmoid_normal":
+        parametric_action_distribution = distribution.NormalSigmoidDistribution(
+            event_size=action_size
+        )
     else:
         raise ValueError(
             f"Unsupported distribution type: {distribution_type}. Must be one"
-            ' of "normal" or "tanh_normal".'
+            ' of "normal", "tanh_normal", or "sigmoid_normal".'
         )
 
     policy_obs_size = _get_obs_state_size(observation_size, policy_obs_key)
     q_obs_size = _get_obs_state_size(observation_size, q_obs_key)
 
     # --- Policy module -----------------------------------------------------
-    if distribution_type == "tanh_normal":
+    # tanh_normal and sigmoid_normal both have learned std (param_size = 2*event_size)
+    # via softplus on the second half of the output. normal goes through
+    # RecurrentPolicyModule which has a separately-parameterized scale head.
+    if distribution_type in ("tanh_normal", "sigmoid_normal"):
         policy_module = rnn_shared.RecurrentMLP(
             rnn_hidden_size=rnn_hidden_size,
             output_layer_sizes=list(policy_output_layer_sizes)
