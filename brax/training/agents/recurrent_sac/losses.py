@@ -25,7 +25,7 @@ Operates on batched sequences with leading shape ``[B, T, ...]``. Each loss:
     ``unroll_length = T - burn_in`` steps.
 """
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from brax.training import types
 from brax.training.agents.recurrent_sac import networks as recurrent_sac_networks
@@ -77,6 +77,7 @@ def make_losses(
     discounting: float,
     action_size: int,
     burn_in: int = 0,
+    target_entropy: Optional[float] = None,
 ):
     """Build the alpha, critic, and actor loss functions.
 
@@ -89,11 +90,14 @@ def make_losses(
         for warming up RNN hidden states under ``stop_gradient`` before the
         loss is computed. Default ``0`` is equivalent to pure zero-init Q
         hidden (no burn-in).
+      target_entropy: Target entropy for the auto-tuned alpha. If ``None``,
+        defaults to ``-0.5 * action_size`` (preserves prior behavior).
 
     Returns:
       ``(alpha_loss, critic_loss, actor_loss)``.
     """
-    target_entropy = -0.5 * action_size
+    if target_entropy is None:
+        target_entropy = -0.5 * action_size
     policy_network = recurrent_sac_network.policy_network
     q_network = recurrent_sac_network.q_network
     param_dist = recurrent_sac_network.parametric_action_distribution

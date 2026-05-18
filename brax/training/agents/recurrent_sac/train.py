@@ -107,11 +107,12 @@ def _init_training_state(
     q_optimizer: optax.GradientTransformation,
     normalize_observations_std_eps: float,
     normalize_observations_mode: str,
+    init_log_alpha: float = 0.0,
 ) -> TrainingState:
     """Initialize training state and replicate it across devices."""
     key_policy, key_q = jax.random.split(key)
 
-    log_alpha = jnp.asarray(0.0, dtype=jnp.float32)
+    log_alpha = jnp.asarray(init_log_alpha, dtype=jnp.float32)
     alpha_optimizer_state = alpha_optimizer.init(log_alpha)
 
     policy_params = recurrent_sac_network.policy_network.init(key_policy)
@@ -275,6 +276,9 @@ def train(
     randomization_fn: Optional[
         Callable[[base.System, jnp.ndarray], Tuple[base.System, base.System]]
     ] = None,
+    alpha_learning_rate: float = 3e-4,
+    target_entropy: Optional[float] = None,
+    init_log_alpha: float = 0.0,
 ):
     """Recurrent SAC training.
 
@@ -397,7 +401,7 @@ def train(
     )
     make_policy = recurrent_sac_networks.make_inference_fn(recurrent_sac_network)
 
-    alpha_optimizer = optax.adam(learning_rate=3e-4)
+    alpha_optimizer = optax.adam(learning_rate=alpha_learning_rate)
     policy_optimizer = optax.adam(learning_rate=learning_rate)
     q_optimizer = optax.adam(learning_rate=learning_rate)
 
@@ -407,6 +411,7 @@ def train(
         discounting=discounting,
         action_size=env.action_size,
         burn_in=burn_in,
+        target_entropy=target_entropy,
     )
     alpha_update = gradients.gradient_update_fn(
         alpha_loss_fn, alpha_optimizer, pmap_axis_name=_PMAP_AXIS_NAME
@@ -742,6 +747,7 @@ def train(
         q_optimizer=q_optimizer,
         normalize_observations_std_eps=normalize_observations_std_eps,
         normalize_observations_mode=normalize_observations_mode,
+        init_log_alpha=init_log_alpha,
     )
     del global_key
 
