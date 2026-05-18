@@ -28,7 +28,7 @@ from typing import Any, Callable, Literal, Mapping, Sequence, Tuple
 from brax.training import distribution
 from brax.training import networks
 from brax.training import types
-from brax.training.agents.recurrent_ppo import networks as rnn_shared
+from brax.training.agents.recurrent_ppo_feature import networks as rnn_shared
 from brax.training.types import PRNGKey
 import flax
 from flax import linen
@@ -130,6 +130,12 @@ def make_recurrent_sac_networks(
     policy_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
     q_network_kernel_init_fn: Initializer = jax.nn.initializers.lecun_uniform,
     q_network_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    mean_kernel_init_fn: Initializer | None = None,
+    mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    mean_bias_init_fn: Initializer | None = None,
+    mean_bias_init_kwargs: Mapping[str, Any] | None = None,
+    policy_network_layer_norm: bool = False,
+    q_network_layer_norm: bool = False,
 ) -> RecurrentSACNetworks:
     """Build recurrent SAC networks.
 
@@ -168,6 +174,16 @@ def make_recurrent_sac_networks(
     q_kernel_init_kwargs = q_network_kernel_init_kwargs or {}
     policy_kernel_init = policy_network_kernel_init_fn(**policy_kernel_init_kwargs)
     q_kernel_init = q_network_kernel_init_fn(**q_kernel_init_kwargs)
+    mean_kernel_init = (
+        mean_kernel_init_fn(**(mean_kernel_init_kwargs or {}))
+        if mean_kernel_init_fn is not None
+        else None
+    )
+    mean_bias_init = (
+        mean_bias_init_fn(**(mean_bias_init_kwargs or {}))
+        if mean_bias_init_fn is not None
+        else None
+    )
 
     parametric_action_distribution: distribution.ParametricDistribution
     if distribution_type == "normal":
@@ -197,6 +213,9 @@ def make_recurrent_sac_networks(
             activation=activation,
             kernel_init=policy_kernel_init,
             activate_final=False,
+            mean_kernel_init=mean_kernel_init,
+            mean_bias_init=mean_bias_init,
+            layer_norm=policy_network_layer_norm,
         )
     else:
         policy_module = rnn_shared.RecurrentPolicyModule(
@@ -209,6 +228,9 @@ def make_recurrent_sac_networks(
             noise_std_type=noise_std_type,
             init_noise_std=init_noise_std,
             state_dependent_std=state_dependent_std,
+            mean_kernel_init=mean_kernel_init,
+            mean_bias_init=mean_bias_init,
+            layer_norm=policy_network_layer_norm,
         )
 
     # --- Q module: single recurrent backbone, 2-head output ---------------
@@ -219,6 +241,7 @@ def make_recurrent_sac_networks(
         activation=activation,
         kernel_init=q_kernel_init,
         activate_final=False,
+        layer_norm=q_network_layer_norm,
     )
 
     # --- Policy network wiring --------------------------------------------
