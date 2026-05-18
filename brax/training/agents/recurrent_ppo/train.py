@@ -420,7 +420,7 @@ def train(
     ] = None,
     # ppo params
     learning_rate: float = 1e-4,
-    entropy_cost: float = 1e-4,
+    entropy_cost=1e-4,  # float | Callable[[jnp.ndarray], jnp.ndarray]
     discounting: float = 0.9,
     unroll_length: int = 10,
     batch_size: int = 32,
@@ -653,11 +653,12 @@ def train(
         carry,
         data: types.Transition,
         normalizer_params: running_statistics.RunningStatisticsState,
+        progress: jnp.ndarray,
     ):
         optimizer_state, params, key = carry
         key, key_loss = jax.random.split(key)
         (_, metrics), grads = loss_and_pgrad_fn(
-            params, normalizer_params, data, key_loss
+            params, normalizer_params, data, key_loss, progress
         )
 
         if lr_is_adaptive_kl:
@@ -680,6 +681,7 @@ def train(
         unused_t,
         data: types.Transition,
         normalizer_params: running_statistics.RunningStatisticsState,
+        progress: jnp.ndarray,
     ):
         optimizer_state, params, key = carry
         key, key_perm, key_grad = jax.random.split(key, 3)
@@ -703,7 +705,11 @@ def train(
 
         shuffled_data = jax.tree_util.tree_map(convert_data, data)
         (optimizer_state, params, _), metrics = jax.lax.scan(
-            functools.partial(minibatch_step, normalizer_params=normalizer_params),
+            functools.partial(
+                minibatch_step,
+                normalizer_params=normalizer_params,
+                progress=progress,
+            ),
             (optimizer_state, params, key_grad),
             shuffled_data,
             length=num_minibatches,
@@ -798,8 +804,24 @@ def train(
                 pmap_axis_name=_PMAP_AXIS_NAME,
             )
 
+        # training_state.env_steps is a UInt64(hi, lo) flax dataclass — recombine
+        # via float arithmetic for the entropy-schedule progress fraction.
+        env_steps_f32 = (
+            jnp.asarray(training_state.env_steps.hi, jnp.float32)
+            * jnp.float32(2.0**32)
+            + jnp.asarray(training_state.env_steps.lo, jnp.float32)
+        )
+        progress = jnp.minimum(
+            env_steps_f32 / jnp.float32(max(num_timesteps, 1)),
+            jnp.float32(1.0),
+        )
         (optimizer_state, params, _), metrics = jax.lax.scan(
-            functools.partial(sgd_step, data=data, normalizer_params=normalizer_params),
+            functools.partial(
+                sgd_step,
+                data=data,
+                normalizer_params=normalizer_params,
+                progress=progress,
+            ),
             (training_state.optimizer_state, training_state.params, key_sgd),
             (),
             length=num_updates_per_batch,

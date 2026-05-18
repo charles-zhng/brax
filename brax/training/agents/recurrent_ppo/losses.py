@@ -45,8 +45,9 @@ def compute_rnn_ppo_loss(
     normalizer_params: Any,
     data: types.Transition,
     rng: jnp.ndarray,
+    progress: jnp.ndarray,
     rnn_ppo_network: rnn_ppo_networks.RNNPPONetworks,
-    entropy_cost: float = 1e-4,
+    entropy_cost=1e-4,
     discounting: float = 0.9,
     reward_scaling: float = 1.0,
     gae_lambda: float = 0.95,
@@ -72,8 +73,13 @@ def compute_rnn_ppo_loss(
         If present, ['policy_extras']['policy_rng'] is used to replay stochastic
         policy layers deterministically.
       rng: Random key
+      progress: Training progress in [0, 1] (env_steps / num_timesteps).
+        Passed to `entropy_cost` if it is callable, enabling exploration
+        annealing schedules.
       rnn_ppo_network: RNN-PPO networks
-      entropy_cost: Entropy cost coefficient
+      entropy_cost: Entropy cost coefficient. Either a float, or a
+        Callable[[progress], float] that maps a 0-d progress scalar to the
+        current entropy weight (e.g. cosine decay).
       discounting: Discount factor
       reward_scaling: Reward multiplier
       gae_lambda: GAE lambda
@@ -282,9 +288,14 @@ def compute_rnn_ppo_loss(
         v_loss = jnp.maximum(v_loss, v_loss_clipped)
     v_loss = jnp.mean(v_loss) * 0.5 * vf_coefficient
 
-    # Entropy reward
+    # Entropy reward — entropy_cost can be a scalar or a callable schedule
+    # of training progress. The branch is decided at trace time.
+    if callable(entropy_cost):
+        entropy_weight = entropy_cost(progress)
+    else:
+        entropy_weight = entropy_cost
     entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
-    entropy_loss = entropy_cost * -entropy
+    entropy_loss = entropy_weight * -entropy
 
     total_loss = policy_loss + v_loss + entropy_loss
 
@@ -302,6 +313,7 @@ def compute_rnn_ppo_loss(
         "policy_loss": policy_loss,
         "v_loss": v_loss,
         "entropy_loss": entropy_loss,
+        "entropy_cost": jnp.asarray(entropy_weight),
         "kl_mean": kl,
         "policy_dist_mean_std": policy_dist_mean_std,
     }
