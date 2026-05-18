@@ -45,8 +45,9 @@ def compute_rnn_ppo_loss(
     normalizer_params: Any,
     data: types.Transition,
     rng: jnp.ndarray,
+    progress: jnp.ndarray,
     rnn_ppo_network: rnn_ppo_networks.RNNPPONetworks,
-    entropy_cost: float = 1e-4,
+    entropy_cost=1e-4,
     discounting: float = 0.9,
     reward_scaling: float = 1.0,
     gae_lambda: float = 0.95,
@@ -284,9 +285,13 @@ def compute_rnn_ppo_loss(
         v_loss = jnp.maximum(v_loss, v_loss_clipped)
     v_loss = jnp.mean(v_loss) * 0.5 * vf_coefficient
 
-    # Entropy reward
+    # Entropy reward — entropy_cost may be scalar or callable schedule.
+    if callable(entropy_cost):
+        entropy_weight = entropy_cost(progress)
+    else:
+        entropy_weight = entropy_cost
     entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
-    entropy_loss = entropy_cost * -entropy
+    entropy_loss = entropy_weight * -entropy
 
     # Feature-learning gamma: scale policy + entropy losses by gamma^2
     # (both flow through the policy network; value loss is a separate MLP)
@@ -317,6 +322,7 @@ def compute_rnn_ppo_loss(
         "policy_loss": policy_loss,
         "v_loss": v_loss,
         "entropy_loss": entropy_loss,
+        "entropy_cost": jnp.asarray(entropy_weight),
         "weight_decay_loss": weight_decay_loss,
         "kl_mean": kl,
         "policy_dist_mean_std": policy_dist_mean_std,
