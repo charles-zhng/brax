@@ -135,6 +135,7 @@ class RecurrentMLP(linen.Module):
     mean_kernel_init: Initializer | None = None
     mean_bias_init: Initializer | None = None
     activate_final: bool = True
+    layer_norm: bool = False
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
@@ -157,6 +158,7 @@ class RecurrentMLP(linen.Module):
                 activation=self.activation,
                 kernel_init=self.kernel_init,
                 activate_final=True,
+                layer_norm=self.layer_norm,
             )
             mean_kernel_init = (
                 self.mean_kernel_init if self.mean_kernel_init is not None
@@ -175,8 +177,12 @@ class RecurrentMLP(linen.Module):
                 activation=self.activation,
                 kernel_init=self.kernel_init,
                 activate_final=self.activate_final,
+                layer_norm=self.layer_norm,
             )
             self.mean_layer = None
+        # Post-RNN LayerNorm stabilizes the recurrent representation before
+        # it feeds the MLP. Matches DroQ/CrossQ-style critic regularization.
+        self.rnn_layer_norm = linen.LayerNorm() if self.layer_norm else None
 
     def __call__(
         self, obs: jnp.ndarray, hidden: HiddenState
@@ -196,6 +202,8 @@ class RecurrentMLP(linen.Module):
             rnn_output = new_hidden[1]
         else:
             rnn_output = new_hidden
+        if self.rnn_layer_norm is not None:
+            rnn_output = self.rnn_layer_norm(rnn_output)
         output = self.output_mlp(rnn_output)
         if self.mean_layer is not None:
             output = self.mean_layer(output)
@@ -241,6 +249,7 @@ class RecurrentPolicyModule(linen.Module):
     mean_clip_scale: float | None = None
     mean_kernel_init: Initializer | None = None
     mean_bias_init: Initializer | None = None
+    layer_norm: bool = False
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -251,6 +260,7 @@ class RecurrentPolicyModule(linen.Module):
             kernel_init=self.kernel_init,
             recurrent_kernel_init=self.recurrent_kernel_init,
             rnn_bias_init=self.rnn_bias_init,
+            layer_norm=self.layer_norm,
         )
         mean_kernel_init = (
             self.mean_kernel_init if self.mean_kernel_init is not None
