@@ -29,7 +29,7 @@ import jax.numpy as jnp
 
 
 # Type alias for RNN cell types
-RNNCellType = Literal["simple", "gru", "lstm"]
+RNNCellType = Literal["simple", "gru", "lstm", "lowrank"]
 
 # Type alias for hidden state - can be a single array (SimpleCell/GRU) or tuple (LSTM)
 HiddenState = Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]
@@ -47,10 +47,51 @@ def _policy_rngs(rng: PRNGKey | None):
     }
 
 
+class LowRankSimpleCell(linen.RNNCellBase):
+    """Vanilla RNN with a low-rank recurrent matrix.
+
+    Implements the Mastrogiuseppe-Ostojic parameterisation
+        J_ij = (1/N) sum_{r=1}^{R} m_i^{(r)} n_j^{(r)},
+    trained as two (N, R) connectivity matrices ``m`` and ``n`` instead of a
+    full (N, N) recurrent kernel. The hidden update is
+        h_{t+1} = tanh(J h_t + W_x x_t + b)
+    where W_x is a full-rank input kernel and b a bias. The N x N matrix J is
+    never materialised: ``J h = (1/N) m @ (n^T h)`` is computed as two
+    rectangular matmuls of cost O(N R) per step.
+    """
+
+    features: int
+    rank: int
+    activation: Callable = jnp.tanh
+    kernel_init: Initializer = jax.nn.initializers.lecun_uniform()
+    factor_init: Initializer = jax.nn.initializers.normal(stddev=1.0)
+
+    @linen.compact
+    def __call__(self, carry, x):
+        # carry: (batch, N); x: (batch, input_dim)
+        n_hidden = self.features
+        rank = self.rank
+        m = self.param("m", self.factor_init, (n_hidden, rank))  # left vectors
+        n = self.param("n", self.factor_init, (n_hidden, rank))  # right vectors
+        proj = carry @ n                                          # (batch, R)
+        recurrent = (proj @ m.T) / float(n_hidden)                # (batch, N)
+        input_proj = linen.Dense(
+            n_hidden, kernel_init=self.kernel_init, name="input_kernel"
+        )(x)
+        bias = self.param("bias", jax.nn.initializers.zeros, (n_hidden,))
+        new_h = self.activation(recurrent + input_proj + bias)
+        return new_h, new_h
+
+    @property
+    def num_feature_axes(self) -> int:
+        return 1
+
+
 def get_rnn_cell(
     cell_type: RNNCellType,
     hidden_size: int,
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform(),
+    rank: int | None = None,
 ) -> linen.RNNCellBase:
     """Returns the appropriate RNN cell based on cell_type."""
     if cell_type == "simple":
@@ -59,10 +100,18 @@ def get_rnn_cell(
         return linen.GRUCell(features=hidden_size, kernel_init=kernel_init)
     elif cell_type == "lstm":
         return linen.LSTMCell(features=hidden_size, kernel_init=kernel_init)
+    elif cell_type == "lowrank":
+        if rank is None or rank <= 0:
+            raise ValueError(
+                "cell_type='lowrank' requires a positive integer `rank`."
+            )
+        return LowRankSimpleCell(
+            features=hidden_size, rank=rank, kernel_init=kernel_init
+        )
     else:
         raise ValueError(
             f"Unsupported RNN cell type: {cell_type}. Must be one of"
-            ' "simple", "gru", or "lstm".'
+            ' "simple", "gru", "lstm", or "lowrank".'
         )
 
 
@@ -100,10 +149,11 @@ class RecurrentMLP(linen.Module):
     mean_clip_scale: float | None = None
     mean_kernel_init: Initializer | None = None
     activate_final: bool = True
+    rank: int | None = None
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
-            self.cell_type, self.rnn_hidden_size, self.kernel_init
+            self.cell_type, self.rnn_hidden_size, self.kernel_init, rank=self.rank
         )
         # If mean_kernel_init or mean_clip_scale is set, split off the final
         # layer so it can use a different initializer / clipping.
@@ -190,6 +240,7 @@ class RecurrentPolicyModule(linen.Module):
     state_dependent_std: bool = False
     mean_clip_scale: float | None = None
     mean_kernel_init: Initializer | None = None
+    rank: int | None = None
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -198,6 +249,7 @@ class RecurrentPolicyModule(linen.Module):
             cell_type=self.cell_type,
             activation=self.activation,
             kernel_init=self.kernel_init,
+            rank=self.rank,
         )
         mean_kernel_init = (
             self.mean_kernel_init if self.mean_kernel_init is not None
@@ -275,6 +327,7 @@ class RecurrentValueModule(linen.Module):
     cell_type: RNNCellType = "gru"
     activation: ActivationFn = linen.relu
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform()
+    rank: int | None = None
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -283,6 +336,7 @@ class RecurrentValueModule(linen.Module):
             cell_type=self.cell_type,
             activation=self.activation,
             kernel_init=self.kernel_init,
+            rank=self.rank,
         )
         self.value_layer = linen.Dense(1, kernel_init=self.kernel_init)
 
@@ -459,6 +513,7 @@ def make_rnn_ppo_networks(
     mean_clip_scale: float | None = None,
     mean_kernel_init_fn: Initializer | None = None,
     mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    rank: int | None = None,
 ) -> RNNPPONetworks:
     """Make RNN-PPO networks with preprocessor.
 
@@ -533,6 +588,7 @@ def make_rnn_ppo_networks(
             activate_final=False,
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
+            rank=rank,
         )
     else:
         # For normal distribution, use the policy module with std
@@ -548,6 +604,7 @@ def make_rnn_ppo_networks(
             state_dependent_std=state_dependent_std,
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
+            rank=rank,
         )
 
     # Create value module (standard MLP, non-recurrent)
