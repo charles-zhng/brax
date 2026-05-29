@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "brax"
-version = "0.14.1"
+version = "0.14.2"
 description = "A differentiable physics engine written in JAX."
 authors = [
     { name = "Brax Authors", email = "no-reply@google.com" },
@@ -41,7 +41,7 @@ dependencies = [
     "jaxopt",
     "jinja2",
     "ml_collections",
-    "mujoco",
+    "mujoco>=3.8.1",
     "mujoco-mjx",
     "numpy",
     "optax",
