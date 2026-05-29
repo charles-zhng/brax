@@ -437,6 +437,8 @@ def train(
     max_grad_norm: Optional[float] = None,
     normalize_advantage: bool = True,
     vf_loss_coefficient: float = 0.5,
+    activity_cost: float = 0.0,
+    activity_derivative_cost: float = 0.0,
     bootstrap_on_timeout: bool = False,
     desired_kl: float = 0.01,
     learning_rate_schedule: Optional[Union[str, ppo_optimizer.LRSchedule]] = None,
@@ -494,6 +496,10 @@ def train(
       max_grad_norm: gradient clipping norm value
       normalize_advantage: whether to normalize advantage estimate
       vf_loss_coefficient: Coefficient for value function loss
+      activity_cost: L2 penalty on policy RNN hidden activity (Codol et al. 2024
+        use 0.01); 0.0 disables.
+      activity_derivative_cost: L2 penalty on the temporal derivative of the
+        policy RNN hidden activity (Codol et al. 2024 use 0.1); 0.0 disables.
       bootstrap_on_timeout: if True, bootstrap value on time_out steps
       desired_kl: Desired KL divergence for adaptive KL learning rate
       learning_rate_schedule: Learning rate schedule for the optimizer
@@ -634,6 +640,8 @@ def train(
         normalize_advantage=normalize_advantage,
         vf_coefficient=vf_loss_coefficient,
         clipping_epsilon_value=clipping_epsilon_value,
+        activity_cost=activity_cost,
+        activity_derivative_cost=activity_derivative_cost,
     )
 
     loss_and_pgrad_fn = gradients.loss_and_pgrad(

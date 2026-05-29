@@ -55,6 +55,8 @@ def compute_rnn_ppo_loss(
     normalize_advantage: bool = True,
     vf_coefficient: float = 0.5,
     clipping_epsilon_value: float | None = None,
+    activity_cost: float = 0.0,
+    activity_derivative_cost: float = 0.0,
 ) -> Tuple[jnp.ndarray, types.Metrics]:
     """Computes RNN-PPO loss.
 
@@ -87,6 +89,11 @@ def compute_rnn_ppo_loss(
       normalize_advantage: Whether to normalize advantage estimate
       vf_coefficient: Coefficient for value function loss
       clipping_epsilon_value: Value function loss clipping epsilon
+      activity_cost: L2 penalty on policy RNN hidden activity h_t (Codol et al.
+        2024 use 0.01) to promote parsimonious/sparse activation.
+      activity_derivative_cost: L2 penalty on the temporal derivative
+        (h_t - h_{t-1}) of the policy RNN hidden activity (Codol et al. 2024 use
+        0.1), masked across episode boundaries.
 
     Returns:
       A tuple (loss, metrics)
@@ -113,8 +120,19 @@ def compute_rnn_ppo_loss(
             return (c, h)
         return jnp.where(done_expanded, 0.0, hidden)
 
+    def _hidden_activity(hidden):
+        """Extract the recurrent activity h_t to regularize (LSTM: the h gate)."""
+        if rnn_ppo_network.cell_type == "lstm":
+            return hidden[1]
+        return hidden
+
     def _masked_scan_policy(obs_seq, initial_hidden, done_seq, policy_rng_seq=None):
-        """Process policy network over sequence with hidden state resets on done."""
+        """Process policy network over sequence with hidden state resets on done.
+
+        Returns (policy_outputs, hidden_activity_seq), where hidden_activity_seq
+        is the pre-reset recurrent activity h_t at each step [T, B, hidden_size],
+        used for the activity / activity-derivative regularizers.
+        """
 
         def step(hidden, inputs):
             if policy_rng_seq is None:
@@ -146,16 +164,21 @@ def compute_rnn_ppo_loss(
                     output, new_hidden = jax.vmap(_apply_policy, in_axes=(0, 0, 0))(
                         obs_t, hidden, rng_t
                     )
+            # Capture genuine activity BEFORE the done-reset (the reset only
+            # zeroes the state carried into the next episode).
+            activity = _hidden_activity(new_hidden)
             new_hidden = _reset_hidden(new_hidden, done_t)
-            return new_hidden, output
+            return new_hidden, (output, activity)
 
         if policy_rng_seq is None:
-            _, outputs = jax.lax.scan(step, initial_hidden, (obs_seq, done_seq))
+            _, (outputs, hidden_activity) = jax.lax.scan(
+                step, initial_hidden, (obs_seq, done_seq)
+            )
         else:
-            _, outputs = jax.lax.scan(
+            _, (outputs, hidden_activity) = jax.lax.scan(
                 step, initial_hidden, (obs_seq, done_seq, policy_rng_seq)
             )
-        return outputs
+        return outputs, hidden_activity
 
     initial_policy_hidden = _extract_initial_hidden(
         data.extras["policy_extras"]["initial_policy_hidden"]
@@ -205,7 +228,7 @@ def compute_rnn_ppo_loss(
             policy_rng = policy_rng[0]
 
     # Process policy network over sequence with done-masked hidden resets
-    policy_logits = _masked_scan_policy(
+    policy_logits, policy_hidden_activity = _masked_scan_policy(
         data.observation,
         initial_policy_hidden,
         done,
@@ -297,7 +320,25 @@ def compute_rnn_ppo_loss(
     entropy = jnp.mean(parametric_action_distribution.entropy(policy_logits, rng))
     entropy_loss = entropy_weight * -entropy
 
-    total_loss = policy_loss + v_loss + entropy_loss
+    # Activity regularization on the policy RNN hidden states (Codol et al. 2024):
+    # an L2 penalty on activity h_t and on its temporal derivative h_t - h_{t-1},
+    # both averaged over (time, batch, units) and scale-invariant to hidden width.
+    # hidden_activity has shape [T, B, hidden_size] (time-major, pre-reset).
+    activity_l2 = jnp.mean(jnp.square(policy_hidden_activity))
+    # Temporal derivative, masked across episode boundaries: a diff spanning a
+    # done step (h_{t+1} starts a fresh episode) must not be penalized.
+    activity_diff = policy_hidden_activity[1:] - policy_hidden_activity[:-1]
+    not_done = (1.0 - done[:-1].astype(jnp.float32))[..., None]
+    diff_sq = jnp.square(activity_diff) * not_done
+    derivative_l2 = jnp.sum(diff_sq) / (
+        jnp.sum(not_done) * policy_hidden_activity.shape[-1] + 1e-8
+    )
+    activity_loss = activity_cost * activity_l2
+    activity_derivative_loss = activity_derivative_cost * derivative_l2
+
+    total_loss = (
+        policy_loss + v_loss + entropy_loss + activity_loss + activity_derivative_loss
+    )
 
     new_dist = parametric_action_distribution.create_dist(policy_logits)
     if hasattr(new_dist, "kl_divergence"):
@@ -314,6 +355,8 @@ def compute_rnn_ppo_loss(
         "v_loss": v_loss,
         "entropy_loss": entropy_loss,
         "entropy_cost": jnp.asarray(entropy_weight),
+        "activity_loss": activity_loss,
+        "activity_derivative_loss": activity_derivative_loss,
         "kl_mean": kl,
         "policy_dist_mean_std": policy_dist_mean_std,
     }
