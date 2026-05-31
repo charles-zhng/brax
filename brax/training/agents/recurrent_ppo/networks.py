@@ -92,14 +92,25 @@ def get_rnn_cell(
     hidden_size: int,
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform(),
     rank: int | None = None,
+    recurrent_kernel_init: Initializer | None = None,
 ) -> linen.RNNCellBase:
-    """Returns the appropriate RNN cell based on cell_type."""
+    """Returns the appropriate RNN cell based on cell_type.
+
+    recurrent_kernel_init: initializer for the hidden->hidden weights. None =>
+    Flax default (orthogonal, gain 1). Codol et al. 2024 use orthogonal gain 2
+    for input/recurrent/output to promote a stable initial regime.
+    """
+    # SimpleCell/GRUCell/LSTMCell all accept recurrent_kernel_init; only pass it
+    # when set so the Flax defaults are otherwise preserved byte-for-byte.
+    rkw: dict = {} if recurrent_kernel_init is None else {
+        "recurrent_kernel_init": recurrent_kernel_init
+    }
     if cell_type == "simple":
-        return linen.SimpleCell(features=hidden_size, kernel_init=kernel_init)
+        return linen.SimpleCell(features=hidden_size, kernel_init=kernel_init, **rkw)
     elif cell_type == "gru":
-        return linen.GRUCell(features=hidden_size, kernel_init=kernel_init)
+        return linen.GRUCell(features=hidden_size, kernel_init=kernel_init, **rkw)
     elif cell_type == "lstm":
-        return linen.LSTMCell(features=hidden_size, kernel_init=kernel_init)
+        return linen.LSTMCell(features=hidden_size, kernel_init=kernel_init, **rkw)
     elif cell_type == "lowrank":
         if rank is None or rank <= 0:
             raise ValueError(
@@ -150,14 +161,19 @@ class RecurrentMLP(linen.Module):
     mean_kernel_init: Initializer | None = None
     activate_final: bool = True
     rank: int | None = None
+    recurrent_kernel_init: Initializer | None = None
+    mean_bias_init: Initializer | None = None
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
-            self.cell_type, self.rnn_hidden_size, self.kernel_init, rank=self.rank
+            self.cell_type, self.rnn_hidden_size, self.kernel_init, rank=self.rank,
+            recurrent_kernel_init=self.recurrent_kernel_init,
         )
-        # If mean_kernel_init or mean_clip_scale is set, split off the final
-        # layer so it can use a different initializer / clipping.
-        if self.mean_kernel_init is not None or self.mean_clip_scale is not None:
+        # If mean_kernel_init, mean_bias_init, or mean_clip_scale is set, split
+        # off the final layer so it can use a different initializer / bias /
+        # clipping (e.g. Codol et al.'s output bias of -10 for sigmoid muscles).
+        if (self.mean_kernel_init is not None or self.mean_bias_init is not None
+                or self.mean_clip_scale is not None):
             self.output_mlp = networks.MLP(
                 layer_sizes=list(self.output_layer_sizes[:-1]),
                 activation=self.activation,
@@ -168,8 +184,11 @@ class RecurrentMLP(linen.Module):
                 self.mean_kernel_init if self.mean_kernel_init is not None
                 else self.kernel_init
             )
+            mean_dense_kwargs: dict = {"kernel_init": mean_kernel_init}
+            if self.mean_bias_init is not None:
+                mean_dense_kwargs["bias_init"] = self.mean_bias_init
             self.mean_layer = linen.Dense(
-                self.output_layer_sizes[-1], kernel_init=mean_kernel_init
+                self.output_layer_sizes[-1], **mean_dense_kwargs
             )
         else:
             self.output_mlp = networks.MLP(
@@ -513,6 +532,10 @@ def make_rnn_ppo_networks(
     mean_clip_scale: float | None = None,
     mean_kernel_init_fn: Initializer | None = None,
     mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    policy_recurrent_kernel_init_fn: Initializer | None = None,
+    policy_recurrent_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    mean_bias_init_fn: Initializer | None = None,
+    mean_bias_init_kwargs: Mapping[str, Any] | None = None,
     rank: int | None = None,
 ) -> RNNPPONetworks:
     """Make RNN-PPO networks with preprocessor.
@@ -552,6 +575,14 @@ def make_rnn_ppo_networks(
         mean_kernel_init_fn(**mean_kernel_init_kwargs_)
         if mean_kernel_init_fn is not None else None
     )
+    policy_recurrent_kernel_init = (
+        policy_recurrent_kernel_init_fn(**(policy_recurrent_kernel_init_kwargs or {}))
+        if policy_recurrent_kernel_init_fn is not None else None
+    )
+    mean_bias_init = (
+        mean_bias_init_fn(**(mean_bias_init_kwargs or {}))
+        if mean_bias_init_fn is not None else None
+    )
 
     parametric_action_distribution: distribution.ParametricDistribution
     if distribution_type == "normal":
@@ -588,6 +619,8 @@ def make_rnn_ppo_networks(
             activate_final=False,
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
+            recurrent_kernel_init=policy_recurrent_kernel_init,
+            mean_bias_init=mean_bias_init,
             rank=rank,
         )
     else:
