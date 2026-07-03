@@ -260,6 +260,8 @@ class RecurrentPolicyModule(linen.Module):
     mean_clip_scale: float | None = None
     mean_kernel_init: Initializer | None = None
     rank: int | None = None
+    recurrent_kernel_init: Initializer | None = None
+    mean_bias_init: Initializer | None = None
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -269,12 +271,16 @@ class RecurrentPolicyModule(linen.Module):
             activation=self.activation,
             kernel_init=self.kernel_init,
             rank=self.rank,
+            recurrent_kernel_init=self.recurrent_kernel_init,
         )
         mean_kernel_init = (
             self.mean_kernel_init if self.mean_kernel_init is not None
             else self.kernel_init
         )
-        self.mean_layer = linen.Dense(self.param_size, kernel_init=mean_kernel_init)
+        mean_dense_kwargs: dict = {"kernel_init": mean_kernel_init}
+        if self.mean_bias_init is not None:
+            mean_dense_kwargs["bias_init"] = self.mean_bias_init
+        self.mean_layer = linen.Dense(self.param_size, **mean_dense_kwargs)
 
         if self.state_dependent_std:
             self.std_layer = linen.Dense(self.param_size, kernel_init=self.kernel_init)
@@ -638,6 +644,8 @@ def make_rnn_ppo_networks(
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
             rank=rank,
+            recurrent_kernel_init=policy_recurrent_kernel_init,
+            mean_bias_init=mean_bias_init,
         )
 
     # Create value module (standard MLP, non-recurrent)

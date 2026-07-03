@@ -93,7 +93,7 @@ class PendulumSwingupPartialObs(mjx_env.MjxEnv):
             self.mj_model,
             qpos=qpos,
             impl=self.mjx_model.impl.value,
-            nconmax=self._config.nconmax,
+            naconmax=self._config.nconmax,
             njmax=self._config.njmax,
         )
         data = mjx.forward(self.mjx_model, data)

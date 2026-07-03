@@ -64,10 +64,10 @@ class MjxEpisodeWrapper(Wrapper):
         done = jp.where(steps >= episode_length, one, state.done)
         truncation = jp.where(steps >= episode_length, 1 - state.done, zero)
         prev_done = state.info['episode_done']
-        sum_reward = state.info['episode_metrics']['sum_reward'] + jp.sum(rewards, axis=0)
-        sum_reward *= (1 - prev_done)
-        length = state.info['episode_metrics']['length'] + self.action_repeat
-        length *= (1 - prev_done)
+        # Zero the previous episode's totals BEFORE adding this step's
+        # contribution, so the new episode's first step is counted.
+        sum_reward = state.info['episode_metrics']['sum_reward'] * (1 - prev_done) + jp.sum(rewards, axis=0)
+        length = state.info['episode_metrics']['length'] * (1 - prev_done) + self.action_repeat
         state = state.replace(
             done=done,
             info={
@@ -217,9 +217,9 @@ def rollout_policy(env, make_policy_fn, params, rnn_ppo_network, num_steps=500, 
     state = env.reset(reset_key)
     trajectory = [state]
 
-    policy_hidden = rnn_ppo_network.policy_network.init_hidden(1)
-    value_hidden = rnn_ppo_network.value_network.init_hidden(1)
-    hidden_states = (policy_hidden, value_hidden)
+    # Policy hidden state only (batch size 1); the value network is
+    # feedforward and policy_fn expects the bare policy hidden state.
+    hidden_states = rnn_ppo_network.policy_network.init_hidden(1)
 
     total_reward = 0.0
 

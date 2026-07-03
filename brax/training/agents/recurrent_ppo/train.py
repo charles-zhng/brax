@@ -834,6 +834,11 @@ def train(
             )
 
         policy_extras = dict(data.extras["policy_extras"])
+        # Per-step hidden states are never consumed by the loss (it only uses
+        # initial_policy_hidden); drop them before the SGD shuffle to avoid
+        # materializing permuted [B, T, hidden] copies every update.
+        policy_extras.pop("policy_hidden", None)
+        policy_extras.pop("value_hidden", None)
         policy_extras["initial_policy_hidden"] = initial_policy_hidden
         policy_extras.setdefault("initial_value_hidden", None)
         data = types.Transition(

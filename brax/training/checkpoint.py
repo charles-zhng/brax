@@ -38,6 +38,9 @@ _KERNEL_INIT_FN_KEYWORDS = (
     'value_network_kernel_init_fn',
     'q_network_kernel_init_fn',
     'mean_kernel_init_fn',
+    'policy_recurrent_kernel_init_fn',
+    'recurrent_kernel_init_fn',
+    'mean_bias_init_fn',
 )
 
 

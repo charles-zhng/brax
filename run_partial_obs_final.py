@@ -24,7 +24,10 @@ import jax
 import jax.numpy as jp
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update(
+    "jax_compilation_cache_dir",
+    "/n/netscratch/olveczky_lab/Lab/charleszhang/jax_cache",
+)
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 jax.config.update(

@@ -786,6 +786,11 @@ def train(
             )
 
         policy_extras = dict(data.extras["policy_extras"])
+        # Per-step hidden states are never consumed by the loss (it only uses
+        # initial_policy_hidden); drop them before the SGD shuffle to avoid
+        # materializing permuted [B, T, hidden] copies every update.
+        policy_extras.pop("policy_hidden", None)
+        policy_extras.pop("value_hidden", None)
         policy_extras["initial_policy_hidden"] = initial_policy_hidden
         policy_extras.setdefault("initial_value_hidden", None)
         data = types.Transition(
@@ -962,18 +967,25 @@ def train(
             {},
         )
 
-    training_state = jax.device_put_replicated(
-        training_state, jax.local_devices()[:local_devices_to_use]
-    )
+    # jax.device_put_replicated was removed in jax 0.10; replicate across
+    # devices via an explicit sharding (mirrors recurrent_ppo/train.py).
+    devices = jax.local_devices()[:local_devices_to_use]
+    mesh = jax.sharding.Mesh(np.array(devices), ('_device_put_sharded',))
+    sharding = jax.NamedSharding(mesh, jax.P('_device_put_sharded'))
+
+    def _replicate(x):
+        if isinstance(x, jax.Array):
+            return jax.device_put(jnp.stack([x] * len(devices)), sharding)
+        return jax.device_put(np.stack([x] * len(devices)), sharding)
+
+    training_state = jax.tree_util.tree_map(_replicate, training_state)
 
     # Initialize policy hidden state for training
     # Shape: [num_devices, envs_per_device, hidden_size]
     def init_policy_hidden_for_training():
         hidden = rnn_ppo_network.policy_network.init_hidden(envs_per_device)
-        # Replicate across devices
-        return jax.device_put_replicated(
-            hidden, jax.local_devices()[:local_devices_to_use]
-        )
+        # Replicate across devices (reuses the sharding defined above).
+        return jax.tree_util.tree_map(_replicate, hidden)
 
     policy_hidden = init_policy_hidden_for_training()
 

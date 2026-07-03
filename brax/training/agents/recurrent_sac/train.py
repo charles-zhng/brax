@@ -77,6 +77,20 @@ class TrainingState:
     normalizer_params: running_statistics.RunningStatisticsState
 
 
+def _device_put_replicated(tree, devices):
+    """Replicate a pytree onto devices; jax.device_put_replicated was removed
+    in jax 0.10 (mirrors the fix in recurrent_ppo/train.py)."""
+    mesh = jax.sharding.Mesh(np.array(devices), ("_device_put_sharded",))
+    sharding = jax.NamedSharding(mesh, jax.P("_device_put_sharded"))
+
+    def _replicate(x):
+        if isinstance(x, jax.Array):
+            return jax.device_put(jnp.stack([x] * len(devices)), sharding)
+        return jax.device_put(np.stack([x] * len(devices)), sharding)
+
+    return jax.tree_util.tree_map(_replicate, tree)
+
+
 def _unpmap(v):
     return jax.tree_util.tree_map(
         lambda x: x.addressable_shards[0].data.squeeze(0), v
@@ -139,7 +153,7 @@ def _init_training_state(
         alpha_params=log_alpha,
         normalizer_params=normalizer_params,
     )
-    return jax.device_put_replicated(
+    return _device_put_replicated(
         training_state, jax.local_devices()[:local_devices_to_use]
     )
 
@@ -761,7 +775,7 @@ def train(
 
     def _init_policy_hidden():
         hidden = recurrent_sac_network.policy_network.init_hidden(envs_per_device)
-        return jax.device_put_replicated(
+        return _device_put_replicated(
             hidden, jax.local_devices()[:local_devices_to_use]
         )
 

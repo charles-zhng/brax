@@ -68,10 +68,13 @@ def make_inference_fn(
           raw_actions
       )
       if log_prob.ndim == 0:
-        batch_shape = (1,)
+        # Unbatched call: keep every extras leaf unbatched so downstream
+        # tree-stacking yields uniform leading dims across the pytree.
+        policy_rng = key_policy
       else:
-        batch_shape = log_prob.shape
-      policy_rng = jnp.broadcast_to(key_policy, batch_shape + key_policy.shape)
+        policy_rng = jnp.broadcast_to(
+            key_policy, log_prob.shape + key_policy.shape
+        )
       extras = {
           'log_prob': log_prob,
           'raw_action': raw_actions,
