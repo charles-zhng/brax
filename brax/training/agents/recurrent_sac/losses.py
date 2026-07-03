@@ -21,8 +21,10 @@ Operates on batched sequences with leading shape ``[B, T, ...]``. Each loss:
   - zero-initializes the Q network hidden state and scans it forward over the
     sequence with done-reset hidden,
   - uses the first ``burn_in`` steps of each sequence to warm the Q hidden
-    (stop-gradient) and computes the actual loss over the remaining
-    ``unroll_length = T - burn_in`` steps.
+    and computes the actual loss over the remaining
+    ``unroll_length = T - burn_in`` steps. Note: burn-in only masks those
+    steps out of the loss; gradients still flow through the burn-in segment
+    of the BPTT unroll (no stop_gradient at the boundary).
 """
 
 from typing import Any, Optional, Tuple
@@ -87,9 +89,10 @@ def make_losses(
       discounting: Discount factor (``gamma``).
       action_size: Action dimensionality (used for the entropy target).
       burn_in: Number of leading timesteps within each stored sequence to use
-        for warming up RNN hidden states under ``stop_gradient`` before the
-        loss is computed. Default ``0`` is equivalent to pure zero-init Q
-        hidden (no burn-in).
+        for warming up RNN hidden states; these steps are excluded from the
+        loss but gradients still flow through them in the BPTT unroll (no
+        stop_gradient at the boundary). Default ``0`` is equivalent to pure
+        zero-init Q hidden (no burn-in).
       target_entropy: Target entropy for the auto-tuned alpha. If ``None``,
         defaults to ``-0.5 * action_size`` (preserves prior behavior).
 

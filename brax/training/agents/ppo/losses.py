@@ -195,6 +195,11 @@ def compute_ppo_loss(
         normalizer_params, params.policy, data.observation
     )
   else:
+    # Replay the rollout's stored per-step keys. LIMITATION: rollout drew rng
+    # once per step for the whole [num_envs, ...] batch, while this replays
+    # per element under vmap — the draws only coincide for policies that do
+    # not consume the 'dropout'/'policy' rng streams. Harmless for rng-free
+    # policies (logits are rng-independent).
     def _apply_policy(obs_t, rng_t):
       return policy_apply(normalizer_params, params.policy, obs_t, rng=rng_t)
 

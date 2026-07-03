@@ -222,6 +222,12 @@ def compute_rnn_ppo_loss(
         # policy_rng is stored with a batch dimension for shape consistency,
         # but rollout used a single key for the entire batch. Collapse back
         # to one key per timestep so replay matches the original RNG usage.
+        # LIMITATION: row 0's key sequence only matches every row when all
+        # minibatch rows come from the same unroll window, i.e.
+        # batch_size * num_minibatches == num_envs. With more windows the
+        # shuffled rows carry different key sequences and this replay is NOT
+        # exact for policies that consume the 'dropout'/'policy' rng streams.
+        # Harmless for rng-free (deterministic-feature) policies.
         if policy_rng.ndim == 3:
             policy_rng = policy_rng[:, 0]
         elif policy_rng.ndim == 2:

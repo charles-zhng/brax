@@ -20,7 +20,8 @@ stored as atomic items in a ``UniformSamplingQueue`` — each buffer element is
 a sequence of length ``collect_len = unroll_length + burn_in``. At loss time,
 the policy's initial hidden is recovered from the stored sequence; the Q
 network's hidden is zero-initialized and warmed up over the ``burn_in``
-leading steps before backprop.
+leading steps, which are excluded from the loss (gradients still flow
+through them in the BPTT unroll).
 """
 
 import functools
@@ -310,8 +311,9 @@ def train(
       seed: Random seed.
       batch_size: Number of sequences per gradient step.
       unroll_length: Number of gradient-carrying timesteps per sampled sequence.
-      burn_in: Leading timesteps used to warm RNN hidden states without
-        gradient. Stored sequence length is ``unroll_length + burn_in``.
+      burn_in: Leading timesteps used to warm RNN hidden states; excluded
+        from the loss, but gradients still flow through them in the BPTT
+        unroll. Stored sequence length is ``unroll_length + burn_in``.
       num_evals: Number of evaluation rounds across training.
       normalize_observations: Whether to normalize observations.
       normalize_observations_std_eps: Stability epsilon for normalizer.
