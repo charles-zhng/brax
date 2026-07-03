@@ -1,0 +1,28 @@
+# RNN-PPO (GRU) on CartpoleBalance.
+algo: rnn_ppo
+env: cartpole
+num_timesteps: 10000000
+num_envs: 1024
+num_evals: 20
+episode_length: 500
+seed: 42
+
+network:
+  cell_type: gru
+  policy_rnn_hidden_size: 64
+  policy_output_layer_sizes: [64]
+
+train:
+  learning_rate: 1.0e-4
+  entropy_cost: 0.005
+  discounting: 0.99
+  gae_lambda: 0.95
+  unroll_length: 32
+  batch_size: 512
+  num_minibatches: 16
+  num_updates_per_batch: 8
+  max_grad_norm: 0.5
+  clipping_epsilon: 0.2
+  normalize_observations: true
+  normalize_advantage: true
+  deterministic_eval: true

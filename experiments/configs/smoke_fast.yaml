@@ -1,0 +1,26 @@
+# Tiny smoke test on brax's debug 'fast' env — finishes in ~1 min on CPU.
+# Override the algo to smoke-test others:
+#   python -m experiments.run --config experiments/configs/smoke_fast.yaml \
+#       --set algo=rnn_sac --set 'network={cell_type: gru, rnn_hidden_size: 16}'
+algo: rnn_ppo
+env: fast
+num_timesteps: 2048
+num_envs: 8
+num_evals: 2
+episode_length: 128
+seed: 2
+
+network:
+  cell_type: gru
+  policy_rnn_hidden_size: 16
+  policy_output_layer_sizes: [16]
+
+train:
+  learning_rate: 3.0e-4
+  entropy_cost: 0.01
+  discounting: 0.95
+  unroll_length: 8
+  batch_size: 8
+  num_minibatches: 4
+  num_updates_per_batch: 2
+  normalize_observations: true

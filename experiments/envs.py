@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Pendulum environment with partial observation (angular velocity hidden)."""
+"""Environment registry for the experiment harness.
+
+Registered environments:
+  pendulum          - mujoco_playground PendulumSwingup
+  cartpole          - mujoco_playground CartpoleBalance
+  pendulum_partial  - PendulumSwingupPartialObs (POMDP; dict obs with
+                      'state' (2D, policy) and 'privileged_state' (3D, value))
+  fast              - brax's trivial debug env (CPU smoke tests; no video)
+"""
 
 from typing import Any, Dict, Optional, Union
 
@@ -23,6 +31,10 @@ import mujoco
 from mujoco import mjx
 import numpy as np
 
+from brax import envs as brax_envs
+from experiments.wrappers import wrap_mjx_env
+
+from mujoco_playground import registry
 from mujoco_playground._src import mjx_env
 from mujoco_playground._src import reward
 from mujoco_playground._src.dm_control_suite import common
@@ -178,3 +190,49 @@ class PendulumSwingupPartialObs(mjx_env.MjxEnv):
     @property
     def mjx_model(self) -> mjx.Model:
         return self._mjx_model
+
+
+# ============================================================================
+# Registry
+# ============================================================================
+
+def _load_playground(env_name):
+    def ctor(config_overrides=None):
+        # Default to the JAX backend: with warp-lang installed, playground's
+        # default impl resolves to warp, which cannot run on CPU-only nodes.
+        overrides = {'impl': 'jax', **(config_overrides or {})}
+        return registry.load(env_name, config_overrides=overrides)
+
+    return ctor
+
+
+def _load_partial_pendulum(config_overrides=None):
+    return PendulumSwingupPartialObs(config_overrides=config_overrides)
+
+
+def _load_fast(config_overrides=None):
+    if config_overrides:
+        raise ValueError("env_config is not supported for the 'fast' env")
+    return brax_envs.get_environment('fast')
+
+
+# name -> (constructor, wrap_env_fn or None). A None wrap_env_fn means the env
+# comes from the brax registry and uses brax's default training wrappers.
+_ENVS = {
+    'pendulum': (_load_playground('PendulumSwingup'), wrap_mjx_env),
+    'cartpole': (_load_playground('CartpoleBalance'), wrap_mjx_env),
+    'pendulum_partial': (_load_partial_pendulum, wrap_mjx_env),
+    'fast': (_load_fast, None),
+}
+
+
+def env_names():
+    return sorted(_ENVS)
+
+
+def make_env(name: str, config_overrides=None):
+    """Returns (env, wrap_env_fn) for a registered environment name."""
+    if name not in _ENVS:
+        raise ValueError(f'Unknown env {name!r}. Available: {env_names()}')
+    ctor, wrap_env_fn = _ENVS[name]
+    return ctor(config_overrides), wrap_env_fn

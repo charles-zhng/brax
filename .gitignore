@@ -2,9 +2,9 @@
 outputs/
 slurm-out/
 logs/
-experiments/
 *.md
 slurm.py
+experiments/partial_obs_reproduction.py
 ################################
 
 .DS_Store
