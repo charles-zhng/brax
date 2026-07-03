@@ -385,12 +385,22 @@ class RNNPPOTest(parameterized.TestCase):
                 normalizer_params, params, obs_seq[t], hidden
             )
             step_outputs.append(output)
-        step_output = jnp.stack(step_outputs, axis=0)
+        # Outputs are (mean, std) tuples for the default fixed_tanh_normal;
+        # stack leaf-wise over time.
+        step_output = jax.tree_util.tree_map(
+            lambda *xs: jnp.stack(xs, axis=0), *step_outputs
+        )
 
         # Compare outputs - use rtol=1e-3 and atol=1e-3 to account for float32
         # numerical precision differences between jax.lax.scan and explicit loops.
         # Near-zero values need atol; larger values need rtol for proper comparison.
-        self.assertTrue(jnp.allclose(scan_output, step_output, rtol=1e-3, atol=1e-3))
+        for scan_leaf, step_leaf in zip(
+            jax.tree_util.tree_leaves(scan_output),
+            jax.tree_util.tree_leaves(step_output),
+        ):
+            self.assertTrue(
+                jnp.allclose(scan_leaf, step_leaf, rtol=1e-3, atol=1e-3)
+            )
         if isinstance(hidden, tuple):
             for h1, h2 in zip(scan_final_hidden, hidden):
                 self.assertTrue(jnp.allclose(h1, h2, rtol=1e-3, atol=1e-3))
@@ -423,7 +433,8 @@ class RNNPPOTest(parameterized.TestCase):
             output, _ = rnn_ppo_network.policy_network.apply_sequence(
                 None, params, obs_seq, initial_hidden
             )
-            return jnp.mean(output**2)
+            # Output is a (mean, std) tuple for the default fixed_tanh_normal.
+            return sum(jnp.mean(o**2) for o in jax.tree_util.tree_leaves(output))
 
         batch_size = 2
         seq_length = 3
@@ -608,7 +619,11 @@ class RNNPPOTest(parameterized.TestCase):
         )
         raw_action = action
         log_prob = jnp.zeros((batch_size, seq_length))
-        distribution_params = jnp.zeros((batch_size, seq_length, env.action_size * 2))
+        # Default fixed_tanh_normal policy emits (mean, std) tuple logits.
+        distribution_params = (
+            jnp.zeros((batch_size, seq_length, env.action_size)),
+            jnp.ones((batch_size, seq_length, env.action_size)),
+        )
 
         data = types.Transition(
             observation=obs,
@@ -694,8 +709,11 @@ class RNNPPOTest(parameterized.TestCase):
                 "policy_extras": {
                     "raw_action": action,
                     "log_prob": jnp.zeros((batch_size, seq_length)),
-                    "distribution_params": jnp.zeros(
-                        (batch_size, seq_length, env.action_size * 2)
+                    # Default fixed_tanh_normal policy emits (mean, std)
+                    # tuple logits.
+                    "distribution_params": (
+                        jnp.zeros((batch_size, seq_length, env.action_size)),
+                        jnp.ones((batch_size, seq_length, env.action_size)),
                     ),
                     "initial_policy_hidden": initial_policy_hidden,
                 },
