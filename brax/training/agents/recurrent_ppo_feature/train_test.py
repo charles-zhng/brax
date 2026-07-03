@@ -635,6 +635,7 @@ class RNNPPOTest(parameterized.TestCase):
             normalizer_params=None,
             data=data,
             rng=key,
+            progress=jnp.zeros(()),
             rnn_ppo_network=rnn_ppo_network,
         )
 
@@ -710,6 +711,7 @@ class RNNPPOTest(parameterized.TestCase):
             normalizer_params=None,
             data=data,
             rng=key,
+            progress=jnp.zeros(()),
             rnn_ppo_network=rnn_ppo_network,
         )
 
