@@ -403,6 +403,36 @@ class RecurrentEvaluator:
         return metrics
 
 
+def _force_std_leaf(policy_params, std):
+    """Overwrite the policy's action-noise std leaves with `std`.
+
+    Used to pin a non-learned, scheduled action-noise std (annealed
+    exploration). Handles both the 'scalar' ('std_param') and 'log'
+    ('std_logparam') parameterizations; raises if the policy has neither
+    (e.g. state-dependent std), where forcing a scheduled std is undefined.
+    """
+    matched = 0
+
+    def f(path, leaf):
+        nonlocal matched
+        keys = {str(getattr(k, "key", k)) for k in path}
+        if "std_param" in keys:
+            matched += 1
+            return jnp.full_like(leaf, std)
+        if "std_logparam" in keys:
+            matched += 1
+            return jnp.full_like(leaf, jnp.log(std))
+        return leaf
+
+    new_params = jax.tree_util.tree_map_with_path(f, policy_params)
+    if matched == 0:
+        raise ValueError(
+            "noise_std_schedule requires a policy with a non-state-dependent"
+            " std leaf ('std_param' or 'std_logparam'); none found."
+        )
+    return new_params
+
+
 def train(
     environment: envs.Env,
     num_timesteps: int,
@@ -421,6 +451,13 @@ def train(
     # ppo params
     learning_rate: float = 1e-4,
     entropy_cost=1e-4,  # float | Callable[[jnp.ndarray], jnp.ndarray]
+    # Annealed action-noise exploration (Codol et al. 2024): when set, the policy's
+    # non-state-dependent std is FORCED to noise_std_schedule(progress) after every
+    # minibatch update instead of being learned (which collapses it). Works with
+    # 'scalar' and 'log' std parameterizations; incompatible with state-dependent
+    # std. Progress-gated proxy for the paper's return-gated sigma. None => off
+    # (learned std).
+    noise_std_schedule: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None,
     discounting: float = 0.9,
     unroll_length: int = 10,
     batch_size: int = 32,
@@ -681,6 +718,13 @@ def train(
 
         params_update, optimizer_state = optimizer.update(grads, optimizer_state)
         params = optax.apply_updates(params, params_update)
+
+        # Annealed action-noise exploration: pin the policy std to the schedule
+        # (progress-gated) instead of the collapsing learned value.
+        if noise_std_schedule is not None:
+            params = params.replace(
+                policy=_force_std_leaf(params.policy, noise_std_schedule(progress))
+            )
 
         return (optimizer_state, params, key), metrics
 
