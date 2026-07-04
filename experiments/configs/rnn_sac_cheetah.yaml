@@ -2,7 +2,7 @@
 algo: rnn_sac
 env: cheetah
 num_timesteps: 10000000
-num_envs: 128
+num_envs: 1024
 num_evals: 20
 episode_length: 1000
 seed: 42
@@ -24,7 +24,7 @@ train:
   burn_in: 0
   min_replay_size: 8192
   max_replay_size: 1000000
-  grad_updates_per_step: 8
+  grad_updates_per_step: 64
   reward_scaling: 1.0
   normalize_observations: true
   deterministic_eval: true
