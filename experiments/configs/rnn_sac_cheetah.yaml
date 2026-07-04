@@ -14,6 +14,7 @@ network:
   policy_output_layer_sizes: [128]
   q_hidden_layer_sizes: [256, 256]
   q_network_layer_norm: true
+  shared_q_backbone: false
 
 train:
   learning_rate: 1.0e-3

@@ -1,7 +1,7 @@
 # Recurrent SAC (GRU) on cartpole_swingup, full obs, warp backend.
 algo: rnn_sac
 env: cartpole_swingup
-num_timesteps: 5000000
+num_timesteps: 10000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000
@@ -14,6 +14,7 @@ network:
   policy_output_layer_sizes: [128]
   q_hidden_layer_sizes: [256, 256]
   q_network_layer_norm: true
+  shared_q_backbone: false
 
 train:
   learning_rate: 1.0e-3

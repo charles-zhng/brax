@@ -1,7 +1,7 @@
 # Feedforward SAC baseline on cartpole_swingup, full obs, warp backend.
 algo: ff_sac
 env: cartpole_swingup
-num_timesteps: 5000000
+num_timesteps: 10000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000

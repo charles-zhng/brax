@@ -1,7 +1,7 @@
 # Feedforward SAC baseline on pendulum POMDP (flat partial obs) — expected to collapse; warp backend.
 algo: ff_sac
 env: pendulum_partial_flat
-num_timesteps: 2000000
+num_timesteps: 10000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000
