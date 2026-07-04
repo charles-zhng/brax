@@ -1,7 +1,7 @@
-# Recurrent SAC (GRU) on pendulum, full obs, warp backend.
+# Recurrent SAC on cartpole_swingup POMDP (velocities hidden from policy; privileged critic), warp backend.
 algo: rnn_sac
-env: pendulum
-num_timesteps: 2000000
+env: cartpole_swingup_partial
+num_timesteps: 5000000
 num_envs: 128
 num_evals: 20
 episode_length: 1000
@@ -14,6 +14,8 @@ network:
   policy_output_layer_sizes: [128]
   q_hidden_layer_sizes: [256, 256]
   q_network_layer_norm: true
+  policy_obs_key: state
+  q_obs_key: privileged_state
 
 train:
   learning_rate: 1.0e-3
@@ -21,7 +23,7 @@ train:
   tau: 0.005
   batch_size: 256
   unroll_length: 32
-  burn_in: 0
+  burn_in: 8
   min_replay_size: 8192
   max_replay_size: 1000000
   grad_updates_per_step: 8

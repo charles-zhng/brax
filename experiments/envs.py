@@ -32,7 +32,7 @@ from mujoco import mjx
 import numpy as np
 
 from brax import envs as brax_envs
-from experiments.wrappers import wrap_mjx_env
+from experiments.wrappers import PartialObsWrapper, wrap_mjx_env
 
 from mujoco_playground import registry
 from mujoco_playground._src import mjx_env
@@ -216,12 +216,48 @@ def _load_fast(config_overrides=None):
     return brax_envs.get_environment('fast')
 
 
+# Visible obs indices for partial-obs (POMDP) variants: expose the position
+# block, hide the velocity block. Layouts read from the installed
+# mujoco_playground _get_obs implementations:
+#   PendulumSwingup: [orientation(2) | angular_velocity(1)]
+#   CartpoleSwingup: [cart_pos(1), pole_cos(1), pole_sin(1) | qvel(2)]
+#   CheetahRun:      [qpos[1:](8) | qvel(9)]
+_PARTIAL_VISIBLE = {
+    'PendulumSwingup': range(2),
+    'CartpoleSwingup': range(3),
+    'CheetahRun': range(8),
+}
+
+
+def _load_partial(env_name, observation_mode):
+    visible_idx = _PARTIAL_VISIBLE[env_name]
+
+    def ctor(config_overrides=None):
+        overrides = {'impl': 'jax', **(config_overrides or {})}
+        base = registry.load(env_name, config_overrides=overrides)
+        return PartialObsWrapper(base, visible_idx, observation_mode)
+
+    return ctor
+
+
 # name -> (constructor, wrap_env_fn or None). A None wrap_env_fn means the env
 # comes from the brax registry and uses brax's default training wrappers.
+# *_partial: dict obs {'state' (policy), 'privileged_state' (critic/value)}.
+# *_partial_flat: partial obs only, flat — for feedforward baselines.
 _ENVS = {
     'pendulum': (_load_playground('PendulumSwingup'), wrap_mjx_env),
     'cartpole': (_load_playground('CartpoleBalance'), wrap_mjx_env),
+    'cartpole_swingup': (_load_playground('CartpoleSwingup'), wrap_mjx_env),
+    # Note: ReacherEasy is broken in playground 0.2.0 + mujoco 3.10
+    # (MjSpec.find_body removed); FingerSpin used instead.
+    'finger_spin': (_load_playground('FingerSpin'), wrap_mjx_env),
+    'cheetah': (_load_playground('CheetahRun'), wrap_mjx_env),
     'pendulum_partial': (_load_partial_pendulum, wrap_mjx_env),
+    'pendulum_partial_flat': (_load_partial('PendulumSwingup', 'flat'), wrap_mjx_env),
+    'cartpole_swingup_partial': (_load_partial('CartpoleSwingup', 'dict'), wrap_mjx_env),
+    'cartpole_swingup_partial_flat': (_load_partial('CartpoleSwingup', 'flat'), wrap_mjx_env),
+    'cheetah_partial': (_load_partial('CheetahRun', 'dict'), wrap_mjx_env),
+    'cheetah_partial_flat': (_load_partial('CheetahRun', 'flat'), wrap_mjx_env),
     'fast': (_load_fast, None),
 }
 

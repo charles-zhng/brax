@@ -18,6 +18,8 @@ from brax.training.agents.recurrent_ppo_feature import networks as rnn_ppo_featu
 from brax.training.agents.recurrent_ppo_feature import train as rnn_ppo_feature_train
 from brax.training.agents.recurrent_sac import networks as rnn_sac_networks
 from brax.training.agents.recurrent_sac import train as rnn_sac_train
+from brax.training.agents.sac import networks as sac_networks
+from brax.training.agents.sac import train as sac_train
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,13 @@ ALGOS: Dict[str, Algo] = {
         # Inference consumes (normalizer, policy); train() returns
         # (normalizer, policy, q) — drop q_params.
         inference_params=lambda params: (params[0], params[1]),
+    ),
+    # Stock brax SAC (feedforward baseline). Flat observations only —
+    # make_sac_networks has no dict-obs support; use the *_partial_flat envs.
+    'ff_sac': Algo(
+        train_fn=sac_train.train,
+        make_networks=sac_networks.make_sac_networks,
+        recurrent=False,
     ),
 }
 

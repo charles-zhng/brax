@@ -1,7 +1,7 @@
-# Recurrent SAC (GRU) on pendulum, full obs, warp backend.
+# Recurrent SAC (GRU) on finger_spin, full obs, warp backend.
 algo: rnn_sac
-env: pendulum
-num_timesteps: 2000000
+env: finger_spin
+num_timesteps: 5000000
 num_envs: 128
 num_evals: 20
 episode_length: 1000

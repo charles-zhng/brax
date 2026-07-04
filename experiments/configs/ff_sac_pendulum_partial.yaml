@@ -1,6 +1,6 @@
-# Recurrent SAC (GRU) on pendulum, full obs, warp backend.
-algo: rnn_sac
-env: pendulum
+# Feedforward SAC baseline on pendulum POMDP (flat partial obs) — expected to collapse; warp backend.
+algo: ff_sac
+env: pendulum_partial_flat
 num_timesteps: 2000000
 num_envs: 128
 num_evals: 20
@@ -9,19 +9,14 @@ seed: 42
 env_config: {impl: warp}
 
 network:
-  cell_type: gru
-  rnn_hidden_size: 128
-  policy_output_layer_sizes: [128]
-  q_hidden_layer_sizes: [256, 256]
+  hidden_layer_sizes: [256, 256]
   q_network_layer_norm: true
 
 train:
   learning_rate: 1.0e-3
   discounting: 0.99
   tau: 0.005
-  batch_size: 256
-  unroll_length: 32
-  burn_in: 0
+  batch_size: 512
   min_replay_size: 8192
   max_replay_size: 1000000
   grad_updates_per_step: 8
