@@ -136,6 +136,11 @@ class RecurrentMLP(linen.Module):
     mean_bias_init: Initializer | None = None
     activate_final: bool = True
     layer_norm: bool = False
+    # Concatenate the raw input to the RNN output before the MLP head. Gives
+    # the head a direct (feedforward) path around the recurrent cell, so the
+    # module is a strict superset of an MLP: useful when the cell attenuates
+    # input information (e.g. weak dQ/da through a fresh GRU).
+    input_skip: bool = False
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
@@ -204,6 +209,8 @@ class RecurrentMLP(linen.Module):
             rnn_output = new_hidden
         if self.rnn_layer_norm is not None:
             rnn_output = self.rnn_layer_norm(rnn_output)
+        if self.input_skip:
+            rnn_output = jnp.concatenate([rnn_output, obs], axis=-1)
         output = self.output_mlp(rnn_output)
         if self.mean_layer is not None:
             output = self.mean_layer(output)
@@ -250,6 +257,7 @@ class RecurrentPolicyModule(linen.Module):
     mean_kernel_init: Initializer | None = None
     mean_bias_init: Initializer | None = None
     layer_norm: bool = False
+    input_skip: bool = False
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -261,6 +269,7 @@ class RecurrentPolicyModule(linen.Module):
             recurrent_kernel_init=self.recurrent_kernel_init,
             rnn_bias_init=self.rnn_bias_init,
             layer_norm=self.layer_norm,
+            input_skip=self.input_skip,
         )
         mean_kernel_init = (
             self.mean_kernel_init if self.mean_kernel_init is not None

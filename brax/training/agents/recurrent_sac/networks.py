@@ -137,6 +137,8 @@ def make_recurrent_sac_networks(
     policy_network_layer_norm: bool = False,
     q_network_layer_norm: bool = False,
     shared_q_backbone: bool = True,
+    policy_input_skip: bool = False,
+    q_input_skip: bool = False,
 ) -> RecurrentSACNetworks:
     """Build recurrent SAC networks.
 
@@ -172,6 +174,11 @@ def make_recurrent_sac_networks(
         layer. If False, two fully independent critics are built (stock-SAC
         style) and vmapped over stacked params; hidden states get a leading
         [2] axis, opaque to the losses.
+      policy_input_skip: Concatenate the (normalized) observation to the RNN
+        output before the policy MLP head — a direct feedforward path around
+        the cell, making the policy a strict superset of an MLP policy.
+      q_input_skip: Same for the Q network's concat(obs, action) input —
+        notably gives the critic a direct dQ/da path around the cell.
 
     Returns:
       A ``RecurrentSACNetworks`` container.
@@ -229,6 +236,7 @@ def make_recurrent_sac_networks(
             mean_kernel_init=mean_kernel_init,
             mean_bias_init=mean_bias_init,
             layer_norm=policy_network_layer_norm,
+            input_skip=policy_input_skip,
         )
     else:
         policy_module = rnn_shared.RecurrentPolicyModule(
@@ -244,6 +252,7 @@ def make_recurrent_sac_networks(
             mean_kernel_init=mean_kernel_init,
             mean_bias_init=mean_bias_init,
             layer_norm=policy_network_layer_norm,
+            input_skip=policy_input_skip,
         )
 
     # --- Q module ----------------------------------------------------------
@@ -259,6 +268,7 @@ def make_recurrent_sac_networks(
         kernel_init=q_kernel_init,
         activate_final=False,
         layer_norm=q_network_layer_norm,
+        input_skip=q_input_skip,
     )
 
     # --- Policy network wiring --------------------------------------------
