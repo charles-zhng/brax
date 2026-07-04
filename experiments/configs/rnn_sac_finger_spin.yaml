@@ -1,10 +1,18 @@
 # Recurrent SAC (GRU) on finger_spin, full obs, warp backend.
+#
+# Hard-exploration recipe (verified 2026-07-04, reward 792 vs ff_sac 617):
+# FingerSpin needs temporally-extended exploration (action_repeat=4) plus
+# entropy pressure that cannot anneal away (fixed alpha=0.2 via near-zero
+# alpha lr) and a long horizon — discovery inflects ~6M steps, ff-parity
+# ~15M. With auto-tuned alpha and action_repeat=1 the policy never finds
+# spin reward: alpha collapses and the actor chases ungrounded Q.
 algo: rnn_sac
 env: finger_spin
-num_timesteps: 10000000
+num_timesteps: 20000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000
+action_repeat: 4
 seed: 42
 env_config: {impl: warp}
 
@@ -29,3 +37,6 @@ train:
   reward_scaling: 1.0
   normalize_observations: true
   deterministic_eval: true
+  # Fixed alpha=0.2: near-zero lr pins log_alpha at its init value.
+  alpha_learning_rate: 1.0e-9
+  init_log_alpha: -1.609
