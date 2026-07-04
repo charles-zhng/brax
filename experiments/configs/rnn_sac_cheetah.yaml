@@ -1,7 +1,9 @@
 # Recurrent SAC (GRU) on cheetah, full obs, warp backend.
+# Verified 2026-07-04: reward 911 vs ff_sac 905 at 20M (rnn needs ~2x the
+# ff horizon; auto-alpha is fine here — dense reward grounds Q early).
 algo: rnn_sac
 env: cheetah
-num_timesteps: 10000000
+num_timesteps: 20000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000

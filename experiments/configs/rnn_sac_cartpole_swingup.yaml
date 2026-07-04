@@ -1,7 +1,9 @@
 # Recurrent SAC (GRU) on cartpole_swingup, full obs, warp backend.
+# Verified 2026-07-04: reward 810 vs ff_sac 820 (99% parity). Needs fixed
+# alpha (auto-alpha plateaus ~230) and a 30M horizon (still climbing at 10M).
 algo: rnn_sac
 env: cartpole_swingup
-num_timesteps: 10000000
+num_timesteps: 30000000
 num_envs: 1024
 num_evals: 20
 episode_length: 1000
@@ -29,3 +31,6 @@ train:
   reward_scaling: 1.0
   normalize_observations: true
   deterministic_eval: true
+  # Fixed alpha=0.2: near-zero lr pins log_alpha at its init value.
+  alpha_learning_rate: 1.0e-9
+  init_log_alpha: -1.609
