@@ -136,6 +136,7 @@ def make_recurrent_sac_networks(
     mean_bias_init_kwargs: Mapping[str, Any] | None = None,
     policy_network_layer_norm: bool = False,
     q_network_layer_norm: bool = False,
+    shared_q_backbone: bool = True,
 ) -> RecurrentSACNetworks:
     """Build recurrent SAC networks.
 
@@ -166,6 +167,11 @@ def make_recurrent_sac_networks(
       policy_network_kernel_init_kwargs: Kwargs for the policy kernel init.
       q_network_kernel_init_fn: Kernel init factory for the Q network.
       q_network_kernel_init_kwargs: Kwargs for the Q kernel init.
+      shared_q_backbone: If True (current default), the twin Q heads share one
+        recurrent backbone + MLP trunk and differ only in the final 2-unit
+        layer. If False, two fully independent critics are built (stock-SAC
+        style) and vmapped over stacked params; hidden states get a leading
+        [2] axis, opaque to the losses.
 
     Returns:
       A ``RecurrentSACNetworks`` container.
@@ -240,10 +246,14 @@ def make_recurrent_sac_networks(
             layer_norm=policy_network_layer_norm,
         )
 
-    # --- Q module: single recurrent backbone, 2-head output ---------------
+    # --- Q module ----------------------------------------------------------
+    # shared_q_backbone=True: single recurrent backbone + trunk, 2-head output.
+    # shared_q_backbone=False: one 1-head module, instantiated twice via
+    # stacked params and vmap (fully independent twin critics, stock-SAC style).
     q_module = rnn_shared.RecurrentMLP(
         rnn_hidden_size=rnn_hidden_size,
-        output_layer_sizes=list(q_hidden_layer_sizes) + [2],
+        output_layer_sizes=list(q_hidden_layer_sizes)
+        + [2 if shared_q_backbone else 1],
         cell_type=cell_type,
         activation=activation,
         kernel_init=q_kernel_init,
@@ -315,28 +325,80 @@ def make_recurrent_sac_networks(
             )
         return preprocess_observations_fn(obs, processor_params)
 
-    def q_apply(processor_params, q_params, obs, action, hidden):
-        obs = _preprocess_q_obs(processor_params, obs)
-        inputs = jnp.concatenate([obs, action], axis=-1)
-        return q_module.apply(q_params, inputs, hidden)
-
-    def q_apply_sequence(processor_params, q_params, obs_seq, action_seq, hidden):
-        obs_seq = _preprocess_q_obs(processor_params, obs_seq)
-        inputs_seq = jnp.concatenate([obs_seq, action_seq], axis=-1)
-        return q_module.apply(
-            q_params, inputs_seq, hidden, method=q_module.scan_forward
-        )
-
     dummy_q_obs = jnp.zeros((1, q_obs_size))
     dummy_q_action = jnp.zeros((1, action_size))
     dummy_q_input = jnp.concatenate([dummy_q_obs, dummy_q_action], axis=-1)
     dummy_q_hidden = rnn_shared.init_hidden_state(cell_type, rnn_hidden_size, 1)
 
-    def q_init(key):
-        return q_module.init(key, dummy_q_input, dummy_q_hidden)
+    if shared_q_backbone:
 
-    def q_init_hidden(batch_size):
-        return rnn_shared.init_hidden_state(cell_type, rnn_hidden_size, batch_size)
+        def q_apply(processor_params, q_params, obs, action, hidden):
+            obs = _preprocess_q_obs(processor_params, obs)
+            inputs = jnp.concatenate([obs, action], axis=-1)
+            return q_module.apply(q_params, inputs, hidden)
+
+        def q_apply_sequence(
+            processor_params, q_params, obs_seq, action_seq, hidden
+        ):
+            obs_seq = _preprocess_q_obs(processor_params, obs_seq)
+            inputs_seq = jnp.concatenate([obs_seq, action_seq], axis=-1)
+            return q_module.apply(
+                q_params, inputs_seq, hidden, method=q_module.scan_forward
+            )
+
+        def q_init(key):
+            return q_module.init(key, dummy_q_input, dummy_q_hidden)
+
+        def q_init_hidden(batch_size):
+            return rnn_shared.init_hidden_state(
+                cell_type, rnn_hidden_size, batch_size
+            )
+
+    else:
+        # Two independent critics: params/hiddens carry a leading [2] axis and
+        # each apply vmaps the single-head module over that axis. The [B, 2]
+        # output and opaque hidden keep the loss code unchanged.
+
+        def q_apply(processor_params, q_params, obs, action, hidden):
+            obs = _preprocess_q_obs(processor_params, obs)
+            inputs = jnp.concatenate([obs, action], axis=-1)
+
+            def single(p, h):
+                return q_module.apply(p, inputs, h)
+
+            q, new_hidden = jax.vmap(single)(q_params, hidden)  # q: [2, B, 1]
+            return jnp.moveaxis(jnp.squeeze(q, -1), 0, -1), new_hidden
+
+        def q_apply_sequence(
+            processor_params, q_params, obs_seq, action_seq, hidden
+        ):
+            obs_seq = _preprocess_q_obs(processor_params, obs_seq)
+            inputs_seq = jnp.concatenate([obs_seq, action_seq], axis=-1)
+
+            def single(p, h):
+                return q_module.apply(
+                    p, inputs_seq, h, method=q_module.scan_forward
+                )
+
+            q, new_hidden = jax.vmap(single)(q_params, hidden)  # [2, T, B, 1]
+            return jnp.moveaxis(jnp.squeeze(q, -1), 0, -1), new_hidden
+
+        def q_init(key):
+            keys = jax.random.split(key)
+            params = [
+                q_module.init(k, dummy_q_input, dummy_q_hidden) for k in keys
+            ]
+            return jax.tree_util.tree_map(
+                lambda *xs: jnp.stack(xs, axis=0), *params
+            )
+
+        def q_init_hidden(batch_size):
+            hidden = rnn_shared.init_hidden_state(
+                cell_type, rnn_hidden_size, batch_size
+            )
+            return jax.tree_util.tree_map(
+                lambda x: jnp.stack([x, x], axis=0), hidden
+            )
 
     q_network = rnn_shared.RecurrentNetwork(
         init=q_init,
