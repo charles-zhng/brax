@@ -32,12 +32,14 @@ from mujoco import mjx
 import numpy as np
 
 from brax import envs as brax_envs
-from experiments.wrappers import PartialObsWrapper, wrap_mjx_env
-
+from experiments.wrappers import PartialObsWrapper
 from mujoco_playground import registry
+from mujoco_playground import wrapper as playground_wrapper
 from mujoco_playground._src import mjx_env
 from mujoco_playground._src import reward
 from mujoco_playground._src.dm_control_suite import common
+
+wrap_for_brax_training = playground_wrapper.wrap_for_brax_training
 
 _XML_PATH = mjx_env.ROOT_PATH / "dm_control_suite" / "xmls" / "pendulum.xml"
 _ANGLE_BOUND = 8
@@ -250,19 +252,19 @@ def _load_partial(env_name, observation_mode):
 # *_partial: dict obs {'state' (policy), 'privileged_state' (critic/value)}.
 # *_partial_flat: partial obs only, flat — for feedforward baselines.
 _ENVS = {
-    'pendulum': (_load_playground('PendulumSwingup'), wrap_mjx_env),
-    'cartpole': (_load_playground('CartpoleBalance'), wrap_mjx_env),
-    'cartpole_swingup': (_load_playground('CartpoleSwingup'), wrap_mjx_env),
+    'pendulum': (_load_playground('PendulumSwingup'), wrap_for_brax_training),
+    'cartpole': (_load_playground('CartpoleBalance'), wrap_for_brax_training),
+    'cartpole_swingup': (_load_playground('CartpoleSwingup'), wrap_for_brax_training),
     # Note: ReacherEasy is broken in playground 0.2.0 + mujoco 3.10
     # (MjSpec.find_body removed); FingerSpin used instead.
-    'finger_spin': (_load_playground('FingerSpin'), wrap_mjx_env),
-    'cheetah': (_load_playground('CheetahRun'), wrap_mjx_env),
-    'pendulum_partial': (_load_partial_pendulum, wrap_mjx_env),
-    'pendulum_partial_flat': (_load_partial('PendulumSwingup', 'flat'), wrap_mjx_env),
-    'cartpole_swingup_partial': (_load_partial('CartpoleSwingup', 'dict'), wrap_mjx_env),
-    'cartpole_swingup_partial_flat': (_load_partial('CartpoleSwingup', 'flat'), wrap_mjx_env),
-    'cheetah_partial': (_load_partial('CheetahRun', 'dict'), wrap_mjx_env),
-    'cheetah_partial_flat': (_load_partial('CheetahRun', 'flat'), wrap_mjx_env),
+    'finger_spin': (_load_playground('FingerSpin'), wrap_for_brax_training),
+    'cheetah': (_load_playground('CheetahRun'), wrap_for_brax_training),
+    'pendulum_partial': (_load_partial_pendulum, wrap_for_brax_training),
+    'pendulum_partial_flat': (_load_partial('PendulumSwingup', 'flat'), wrap_for_brax_training),
+    'cartpole_swingup_partial': (_load_partial('CartpoleSwingup', 'dict'), wrap_for_brax_training),
+    'cartpole_swingup_partial_flat': (_load_partial('CartpoleSwingup', 'flat'), wrap_for_brax_training),
+    'cheetah_partial': (_load_partial('CheetahRun', 'dict'), wrap_for_brax_training),
+    'cheetah_partial_flat': (_load_partial('CheetahRun', 'flat'), wrap_for_brax_training),
     'fast': (_load_fast, None),
 }
 

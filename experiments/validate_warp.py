@@ -1,7 +1,7 @@
 """Warp-backend validation: load, reset, and step envs with impl='warp'.
 
 Run on a CUDA GPU node. For each env: construct with impl='warp', wrap with
-the harness wrappers, vmapped reset + jitted random-action rollout, and check
+playground's training wrappers, vmapped reset + jitted random-action rollout, and check
 outputs are finite. Exits nonzero on any failure.
 
 Usage: python -m experiments.validate_warp [--envs CartpoleBalance,...] [--num-envs 64]
@@ -14,7 +14,9 @@ import jax
 import jax.numpy as jp
 
 from mujoco_playground import registry
-from experiments.wrappers import wrap_mjx_env
+from mujoco_playground import wrapper as playground_wrapper
+
+wrap_for_brax_training = playground_wrapper.wrap_for_brax_training
 
 DEFAULT_ENVS = ['PendulumSwingup', 'CartpoleSwingup', 'FingerSpin', 'CheetahRun']
 
@@ -25,7 +27,7 @@ def validate_env(name, num_envs, num_steps=50, episode_length=1000):
     impl = env.mjx_model.impl
     assert 'warp' in str(impl).lower(), f'{name}: impl is {impl}, not warp'
 
-    wrapped = wrap_mjx_env(env, episode_length=episode_length, action_repeat=1)
+    wrapped = wrap_for_brax_training(env, episode_length=episode_length, action_repeat=1)
     keys = jax.random.split(jax.random.PRNGKey(0), num_envs)
     state = jax.jit(wrapped.reset)(keys)
 
