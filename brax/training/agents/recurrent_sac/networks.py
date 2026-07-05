@@ -28,7 +28,7 @@ from typing import Any, Callable, Literal, Mapping, Sequence, Tuple
 from brax.training import distribution
 from brax.training import networks
 from brax.training import types
-from brax.training.agents.recurrent_ppo_feature import networks as rnn_shared
+from brax.training.agents.recurrent_ppo import networks as rnn_shared
 from brax.training.types import PRNGKey
 import flax
 from flax import linen

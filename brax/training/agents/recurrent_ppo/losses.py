@@ -57,6 +57,8 @@ def compute_rnn_ppo_loss(
     clipping_epsilon_value: float | None = None,
     activity_cost: float = 0.0,
     activity_derivative_cost: float = 0.0,
+    feature_gamma: float = 1.0,
+    weight_decay: float = 0.0,
 ) -> Tuple[jnp.ndarray, types.Metrics]:
     """Computes RNN-PPO loss.
 
@@ -342,8 +344,22 @@ def compute_rnn_ppo_loss(
     activity_loss = activity_cost * activity_l2
     activity_derivative_loss = activity_derivative_cost * derivative_l2
 
+    # Feature-learning gamma: scale policy + entropy losses by gamma^2
+    # (both flow through the policy network; value loss is a separate MLP)
+    _gamma_sq = feature_gamma ** 2
+    policy_loss = policy_loss * _gamma_sq
+    entropy_loss = entropy_loss * _gamma_sq
+
+    weight_decay_loss = jnp.array(0.0)
+    if weight_decay:
+        weight_decay_loss = 0.5 * weight_decay * sum(
+            jnp.sum(jnp.square(leaf))
+            for leaf in jax.tree_util.tree_leaves(params.policy)
+        )
+
     total_loss = (
-        policy_loss + v_loss + entropy_loss + activity_loss + activity_derivative_loss
+        policy_loss + v_loss + entropy_loss + activity_loss
+        + activity_derivative_loss + weight_decay_loss
     )
 
     new_dist = parametric_action_distribution.create_dist(policy_logits)
@@ -363,6 +379,7 @@ def compute_rnn_ppo_loss(
         "entropy_cost": jnp.asarray(entropy_weight),
         "activity_loss": activity_loss,
         "activity_derivative_loss": activity_derivative_loss,
+        "weight_decay_loss": weight_decay_loss,
         "kl_mean": kl,
         "policy_dist_mean_std": policy_dist_mean_std,
     }

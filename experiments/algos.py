@@ -14,8 +14,6 @@ from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo_train
 from brax.training.agents.recurrent_ppo import networks as rnn_ppo_networks
 from brax.training.agents.recurrent_ppo import train as rnn_ppo_train
-from brax.training.agents.recurrent_ppo_feature import networks as rnn_ppo_feature_networks
-from brax.training.agents.recurrent_ppo_feature import train as rnn_ppo_feature_train
 from brax.training.agents.recurrent_sac import networks as rnn_sac_networks
 from brax.training.agents.recurrent_sac import train as rnn_sac_train
 from brax.training.agents.sac import networks as sac_networks
@@ -49,11 +47,6 @@ ALGOS: Dict[str, Algo] = {
     'rnn_ppo': Algo(
         train_fn=rnn_ppo_train.train,
         make_networks=rnn_ppo_networks.make_rnn_ppo_networks,
-        recurrent=True,
-    ),
-    'rnn_ppo_feature': Algo(
-        train_fn=rnn_ppo_feature_train.train,
-        make_networks=rnn_ppo_feature_networks.make_rnn_ppo_networks,
         recurrent=True,
     ),
     'rnn_sac': Algo(

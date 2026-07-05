@@ -30,6 +30,44 @@ from jax import numpy as jnp
 class RNNPPOTest(parameterized.TestCase):
     """Tests for RNN-PPO module."""
 
+    def testTrainFeatureKnobs(self):
+        """Knobs merged from the former recurrent_ppo_feature package:
+        fixed_tanh_normal distribution, feature_gamma, weight_decay,
+        input_skip, rnn_bias_init."""
+        fast = envs.get_environment("fast")
+        network_factory = functools.partial(
+            rnn_ppo_networks.make_rnn_ppo_networks,
+            cell_type="gru",
+            policy_rnn_hidden_size=16,
+            policy_output_layer_sizes=(16,),
+            distribution_type="fixed_tanh_normal",
+            feature_gamma=2.0,
+            input_skip=True,
+            rnn_bias_init_fn=jax.nn.initializers.constant,
+            rnn_bias_init_kwargs={"value": 0.1},
+        )
+        _, _, metrics = rnn_ppo.train(
+            fast,
+            num_timesteps=2048,
+            episode_length=128,
+            num_envs=8,
+            learning_rate=3e-4,
+            entropy_cost=1e-2,
+            discounting=0.95,
+            unroll_length=8,
+            batch_size=8,
+            num_minibatches=4,
+            num_updates_per_batch=2,
+            normalize_observations=True,
+            seed=2,
+            num_evals=2,
+            network_factory=network_factory,
+            feature_gamma=2.0,
+            weight_decay=1e-5,
+        )
+        self.assertIn("eval/episode_reward", metrics)
+        self.assertTrue(jnp.isfinite(metrics["eval/episode_reward"]))
+
     @parameterized.parameters("ndarray", "dict_state")
     def testTrain(self, obs_mode):
         """Test RNN-PPO with a simple env."""

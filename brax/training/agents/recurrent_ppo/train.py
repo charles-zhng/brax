@@ -476,6 +476,12 @@ def train(
     vf_loss_coefficient: float = 0.5,
     activity_cost: float = 0.0,
     activity_derivative_cost: float = 0.0,
+    # Feature-learning knobs (merged from the former recurrent_ppo_feature
+    # package): gamma^2-scale the policy/entropy losses (with the policy loc
+    # output scaled by 1/gamma in the network factory), and L2 weight decay
+    # on the policy params. Defaults are no-ops.
+    feature_gamma: float = 1.0,
+    weight_decay: float = 0.0,
     bootstrap_on_timeout: bool = False,
     desired_kl: float = 0.01,
     learning_rate_schedule: Optional[Union[str, ppo_optimizer.LRSchedule]] = None,
@@ -679,6 +685,8 @@ def train(
         clipping_epsilon_value=clipping_epsilon_value,
         activity_cost=activity_cost,
         activity_derivative_cost=activity_derivative_cost,
+        feature_gamma=feature_gamma,
+        weight_decay=weight_decay,
     )
 
     loss_and_pgrad_fn = gradients.loss_and_pgrad(

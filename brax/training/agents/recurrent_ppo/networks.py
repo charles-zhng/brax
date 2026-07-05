@@ -41,6 +41,21 @@ Initializer = Callable[..., Any]
 _policy_rngs = networks._policy_rngs
 
 
+class FixedStdNormalTanhDistribution(distribution.ParametricDistribution):
+    """Tanh-squashed Gaussian with a fixed/std-parametrized scale."""
+
+    def __init__(self, event_size: int):
+        super().__init__(
+            param_size=event_size,
+            postprocessor=distribution.TanhBijector(),
+            event_ndims=1,
+            reparametrizable=True,
+        )
+
+    def create_dist(self, parameters):
+        return distribution._NormalDistribution(*parameters)
+
+
 class LowRankSimpleCell(linen.RNNCellBase):
     """Vanilla RNN with a low-rank recurrent matrix.
 
@@ -87,18 +102,22 @@ def get_rnn_cell(
     kernel_init: Initializer = jax.nn.initializers.lecun_uniform(),
     rank: int | None = None,
     recurrent_kernel_init: Initializer | None = None,
+    bias_init: Initializer | None = None,
 ) -> linen.RNNCellBase:
     """Returns the appropriate RNN cell based on cell_type.
 
     recurrent_kernel_init: initializer for the hidden->hidden weights. None =>
     Flax default (orthogonal, gain 1). Codol et al. 2024 use orthogonal gain 2
     for input/recurrent/output to promote a stable initial regime.
+    bias_init: initializer for cell biases. None => Flax default (zeros).
     """
-    # SimpleCell/GRUCell/LSTMCell all accept recurrent_kernel_init; only pass it
-    # when set so the Flax defaults are otherwise preserved byte-for-byte.
+    # SimpleCell/GRUCell/LSTMCell all accept these; only pass them when set so
+    # the Flax defaults are otherwise preserved byte-for-byte.
     rkw: dict = {} if recurrent_kernel_init is None else {
         "recurrent_kernel_init": recurrent_kernel_init
     }
+    if bias_init is not None:
+        rkw["bias_init"] = bias_init
     if cell_type == "simple":
         return linen.SimpleCell(features=hidden_size, kernel_init=kernel_init, **rkw)
     elif cell_type == "gru":
@@ -156,12 +175,20 @@ class RecurrentMLP(linen.Module):
     activate_final: bool = True
     rank: int | None = None
     recurrent_kernel_init: Initializer | None = None
+    rnn_bias_init: Initializer | None = None
     mean_bias_init: Initializer | None = None
+    layer_norm: bool = False
+    # Concatenate the raw input to the RNN output before the MLP head. Gives
+    # the head a direct (feedforward) path around the recurrent cell, so the
+    # module is a strict superset of an MLP: useful when the cell attenuates
+    # input information (e.g. weak dQ/da through a fresh GRU).
+    input_skip: bool = False
 
     def setup(self):
         self.rnn_cell = get_rnn_cell(
             self.cell_type, self.rnn_hidden_size, self.kernel_init, rank=self.rank,
             recurrent_kernel_init=self.recurrent_kernel_init,
+            bias_init=self.rnn_bias_init,
         )
         # If mean_kernel_init, mean_bias_init, or mean_clip_scale is set, split
         # off the final layer so it can use a different initializer / bias /
@@ -173,6 +200,7 @@ class RecurrentMLP(linen.Module):
                 activation=self.activation,
                 kernel_init=self.kernel_init,
                 activate_final=True,
+                layer_norm=self.layer_norm,
             )
             mean_kernel_init = (
                 self.mean_kernel_init if self.mean_kernel_init is not None
@@ -190,8 +218,12 @@ class RecurrentMLP(linen.Module):
                 activation=self.activation,
                 kernel_init=self.kernel_init,
                 activate_final=self.activate_final,
+                layer_norm=self.layer_norm,
             )
             self.mean_layer = None
+        # Post-RNN LayerNorm stabilizes the recurrent representation before
+        # it feeds the MLP. Matches DroQ/CrossQ-style critic regularization.
+        self.rnn_layer_norm = linen.LayerNorm() if self.layer_norm else None
 
     def __call__(
         self, obs: jnp.ndarray, hidden: HiddenState
@@ -211,6 +243,10 @@ class RecurrentMLP(linen.Module):
             rnn_output = new_hidden[1]
         else:
             rnn_output = new_hidden
+        if self.rnn_layer_norm is not None:
+            rnn_output = self.rnn_layer_norm(rnn_output)
+        if self.input_skip:
+            rnn_output = jnp.concatenate([rnn_output, obs], axis=-1)
         output = self.output_mlp(rnn_output)
         if self.mean_layer is not None:
             output = self.mean_layer(output)
@@ -255,7 +291,10 @@ class RecurrentPolicyModule(linen.Module):
     mean_kernel_init: Initializer | None = None
     rank: int | None = None
     recurrent_kernel_init: Initializer | None = None
+    rnn_bias_init: Initializer | None = None
     mean_bias_init: Initializer | None = None
+    layer_norm: bool = False
+    input_skip: bool = False
 
     def setup(self):
         self.recurrent_mlp = RecurrentMLP(
@@ -266,6 +305,9 @@ class RecurrentPolicyModule(linen.Module):
             kernel_init=self.kernel_init,
             rank=self.rank,
             recurrent_kernel_init=self.recurrent_kernel_init,
+            rnn_bias_init=self.rnn_bias_init,
+            layer_norm=self.layer_norm,
+            input_skip=self.input_skip,
         )
         mean_kernel_init = (
             self.mean_kernel_init if self.mean_kernel_init is not None
@@ -421,6 +463,7 @@ class RNNPPONetworks:
     parametric_action_distribution: distribution.ParametricDistribution
     rnn_hidden_size: int  # Policy RNN hidden size
     cell_type: RNNCellType  # Policy RNN cell type
+    feature_gamma: float = 1.0  # Feature-learning knob
 
 
 def _get_obs_state_size(obs_size: types.ObservationSize, obs_key: str) -> int:
@@ -534,9 +577,13 @@ def make_rnn_ppo_networks(
     mean_kernel_init_kwargs: Mapping[str, Any] | None = None,
     policy_recurrent_kernel_init_fn: Initializer | None = None,
     policy_recurrent_kernel_init_kwargs: Mapping[str, Any] | None = None,
+    rnn_bias_init_fn: Initializer | None = None,
+    rnn_bias_init_kwargs: Mapping[str, Any] | None = None,
     mean_bias_init_fn: Initializer | None = None,
     mean_bias_init_kwargs: Mapping[str, Any] | None = None,
     rank: int | None = None,
+    feature_gamma: float = 1.0,
+    input_skip: bool = False,
 ) -> RNNPPONetworks:
     """Make RNN-PPO networks with preprocessor.
 
@@ -579,6 +626,10 @@ def make_rnn_ppo_networks(
         policy_recurrent_kernel_init_fn(**(policy_recurrent_kernel_init_kwargs or {}))
         if policy_recurrent_kernel_init_fn is not None else None
     )
+    rnn_bias_init = (
+        rnn_bias_init_fn(**(rnn_bias_init_kwargs or {}))
+        if rnn_bias_init_fn is not None else None
+    )
     mean_bias_init = (
         mean_bias_init_fn(**(mean_bias_init_kwargs or {}))
         if mean_bias_init_fn is not None else None
@@ -597,10 +648,15 @@ def make_rnn_ppo_networks(
         parametric_action_distribution = distribution.NormalSigmoidDistribution(
             event_size=action_size
         )
+    elif distribution_type == "fixed_tanh_normal":
+        parametric_action_distribution = FixedStdNormalTanhDistribution(
+            event_size=action_size
+        )
     else:
         raise ValueError(
             f"Unsupported distribution type: {distribution_type}. Must be one"
-            ' of "normal", "tanh_normal", or "sigmoid_normal".'
+            ' of "normal", "tanh_normal", "fixed_tanh_normal", or'
+            ' "sigmoid_normal".'
         )
 
     obs_size = _get_obs_state_size(observation_size, policy_obs_key)
@@ -620,11 +676,14 @@ def make_rnn_ppo_networks(
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
             recurrent_kernel_init=policy_recurrent_kernel_init,
+            rnn_bias_init=rnn_bias_init,
             mean_bias_init=mean_bias_init,
             rank=rank,
+            input_skip=input_skip,
         )
     else:
-        # For normal distribution, use the policy module with std
+        # For normal / fixed_tanh_normal, use the policy module with a
+        # separately-parameterized std.
         policy_module = RecurrentPolicyModule(
             param_size=parametric_action_distribution.param_size,
             rnn_hidden_size=policy_rnn_hidden_size,
@@ -639,7 +698,9 @@ def make_rnn_ppo_networks(
             mean_kernel_init=mean_kernel_init,
             rank=rank,
             recurrent_kernel_init=policy_recurrent_kernel_init,
+            rnn_bias_init=rnn_bias_init,
             mean_bias_init=mean_bias_init,
+            input_skip=input_skip,
         )
 
     # Create value module (standard MLP, non-recurrent)
@@ -648,6 +709,25 @@ def make_rnn_ppo_networks(
         activation=activation,
         kernel_init=value_kernel_init,
     )
+
+    # Feature-learning gamma: scale policy loc output by 1/gamma
+    _output_scale = 1.0 / feature_gamma
+    _scale_loc_only = distribution_type in (
+        "tanh_normal",
+        "sigmoid_normal",
+        "fixed_tanh_normal",
+    )
+
+    def _apply_output_scale(output):
+        if _output_scale == 1.0:
+            return output
+        if isinstance(output, tuple):
+            loc, scale = output
+            return (loc * _output_scale, scale)
+        if _scale_loc_only:
+            loc, scale_raw = jnp.split(output, 2, axis=-1)
+            return jnp.concatenate([loc * _output_scale, scale_raw], axis=-1)
+        return output * _output_scale
 
     # Policy network functions
     def policy_apply(processor_params, policy_params, obs, hidden, *, rng=None):
@@ -660,8 +740,12 @@ def make_rnn_ppo_networks(
             obs = preprocess_observations_fn(obs, processor_params)
         rngs = _policy_rngs(rng)
         if rngs is None:
-            return policy_module.apply(policy_params, obs, hidden)
-        return policy_module.apply(policy_params, obs, hidden, rngs=rngs)
+            output, new_hidden = policy_module.apply(policy_params, obs, hidden)
+        else:
+            output, new_hidden = policy_module.apply(
+                policy_params, obs, hidden, rngs=rngs
+            )
+        return _apply_output_scale(output), new_hidden
 
     def policy_apply_sequence(
         processor_params, policy_params, obs_seq, hidden, *, rng=None
@@ -675,16 +759,18 @@ def make_rnn_ppo_networks(
             obs_seq = preprocess_observations_fn(obs_seq, processor_params)
         rngs = _policy_rngs(rng)
         if rngs is None:
-            return policy_module.apply(
+            outputs, final_hidden = policy_module.apply(
                 policy_params, obs_seq, hidden, method=policy_module.scan_forward
             )
-        return policy_module.apply(
-            policy_params,
-            obs_seq,
-            hidden,
-            method=policy_module.scan_forward,
-            rngs=rngs,
-        )
+        else:
+            outputs, final_hidden = policy_module.apply(
+                policy_params,
+                obs_seq,
+                hidden,
+                method=policy_module.scan_forward,
+                rngs=rngs,
+            )
+        return _apply_output_scale(outputs), final_hidden
 
     dummy_obs = jnp.zeros((1, obs_size))
     dummy_hidden = init_hidden_state(cell_type, policy_rnn_hidden_size, 1)
@@ -750,4 +836,5 @@ def make_rnn_ppo_networks(
         parametric_action_distribution=parametric_action_distribution,
         rnn_hidden_size=policy_rnn_hidden_size,
         cell_type=cell_type,
+        feature_gamma=feature_gamma,
     )
