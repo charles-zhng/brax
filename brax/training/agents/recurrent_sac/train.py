@@ -45,7 +45,6 @@ from brax.training.types import PRNGKey
 import flax
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 
 
@@ -76,20 +75,6 @@ class TrainingState:
     alpha_optimizer_state: optax.OptState
     alpha_params: Params
     normalizer_params: running_statistics.RunningStatisticsState
-
-
-def _device_put_replicated(tree, devices):
-    """Replicate a pytree onto devices; jax.device_put_replicated was removed
-    in jax 0.10 (mirrors the fix in recurrent_ppo/train.py)."""
-    mesh = jax.sharding.Mesh(np.array(devices), ("_device_put_sharded",))
-    sharding = jax.NamedSharding(mesh, jax.P("_device_put_sharded"))
-
-    def _replicate(x):
-        if isinstance(x, jax.Array):
-            return jax.device_put(jnp.stack([x] * len(devices)), sharding)
-        return jax.device_put(np.stack([x] * len(devices)), sharding)
-
-    return jax.tree_util.tree_map(_replicate, tree)
 
 
 def _unpmap(v):
@@ -154,107 +139,10 @@ def _init_training_state(
         alpha_params=log_alpha,
         normalizer_params=normalizer_params,
     )
-    return _device_put_replicated(
-        training_state, jax.local_devices()[:local_devices_to_use]
-    )
+    return pmap.bcast_local_devices(training_state, local_devices_to_use)
 
 
-class RecurrentSACEvaluator:
-    """Runs evaluation episodes with a recurrent SAC policy."""
-
-    def __init__(
-        self,
-        eval_env: envs.Env,
-        eval_policy_fn: Callable[[Params], Callable],
-        recurrent_sac_network: recurrent_sac_networks.RecurrentSACNetworks,
-        num_eval_envs: int,
-        episode_length: int,
-        action_repeat: int,
-        key: PRNGKey,
-    ):
-        self._key = key
-        self._eval_walltime = 0.0
-        self._num_eval_envs = num_eval_envs
-
-        eval_env = envs.training.EvalWrapper(eval_env)
-        self._eval_state_to_donate = jax.jit(eval_env.reset)(
-            jax.random.split(key, num_eval_envs)
-        )
-
-        def generate_eval_unroll(
-            eval_env_state_donated: envs.State,
-            policy_params,
-            key: PRNGKey,
-        ) -> envs.State:
-            reset_keys = jax.random.split(key, num_eval_envs)
-            eval_first_state = eval_env.reset(reset_keys)
-            policy_hidden = recurrent_sac_network.policy_network.init_hidden(
-                num_eval_envs
-            )
-            final_state, _, _ = rnn_ppo_train.generate_unroll_rnn(
-                eval_env,
-                eval_first_state,
-                eval_policy_fn(policy_params),
-                policy_hidden,
-                key,
-                unroll_length=episode_length // action_repeat,
-                store_initial_hidden=False,
-                rnn_ppo_network=recurrent_sac_network,
-            )
-            return final_state
-
-        self._generate_eval_unroll = jax.jit(
-            generate_eval_unroll, donate_argnums=(0,), keep_unused=True
-        )
-        self._steps_per_unroll = episode_length * num_eval_envs
-
-    def run_evaluation(
-        self,
-        policy_params,
-        training_metrics: Metrics,
-        aggregate_episodes: bool = True,
-    ) -> Metrics:
-        self._key, unroll_key = jax.random.split(self._key)
-        t = time.time()
-        eval_state = self._generate_eval_unroll(
-            self._eval_state_to_donate, policy_params, unroll_key
-        )
-        self._eval_state_to_donate = eval_state
-
-        eval_metrics = eval_state.info["eval_metrics"]
-        eval_metrics.active_episodes.block_until_ready()
-        epoch_eval_time = time.time() - t
-        episode_lengths = np.maximum(eval_metrics.episode_steps, 1.0).astype(float)
-
-        def _agg(metric, fn, to_aggregate, to_normalize, episode_lengths):
-            if not to_aggregate:
-                return metric
-            if to_normalize:
-                return fn(metric / episode_lengths)
-            return fn(metric)
-
-        metrics: Metrics = {}
-        for fn in [np.mean, np.std]:
-            suffix = "_std" if fn == np.std else ""
-            for name, value in eval_metrics.episode_metrics.items():
-                metrics[f"eval/episode_{name}{suffix}"] = _agg(
-                    value,
-                    fn,
-                    aggregate_episodes,
-                    name.endswith("per_step"),
-                    episode_lengths,
-                )
-        metrics["eval/avg_episode_length"] = np.mean(eval_metrics.episode_steps)
-        metrics["eval/std_episode_length"] = np.std(eval_metrics.episode_steps)
-        metrics["eval/epoch_eval_time"] = epoch_eval_time
-        metrics["eval/sps"] = self._steps_per_unroll / epoch_eval_time
-        self._eval_walltime = self._eval_walltime + epoch_eval_time
-        return {
-            "eval/walltime": self._eval_walltime,
-            **training_metrics,
-            **metrics,
-        }
-
+# Evaluation reuses recurrent_ppo's RecurrentEvaluator (identical logic).
 
 def train(
     environment: envs.Env,
@@ -777,9 +665,7 @@ def train(
 
     def _init_policy_hidden():
         hidden = recurrent_sac_network.policy_network.init_hidden(envs_per_device)
-        return _device_put_replicated(
-            hidden, jax.local_devices()[:local_devices_to_use]
-        )
+        return pmap.bcast_local_devices(hidden, local_devices_to_use)
 
     policy_hidden = _init_policy_hidden()
 
@@ -800,7 +686,7 @@ def train(
             randomization_fn=v_randomization_fn,
         )
 
-    evaluator = RecurrentSACEvaluator(
+    evaluator = rnn_ppo_train.RecurrentEvaluator(
         eval_env,
         functools.partial(make_policy, deterministic=deterministic_eval),
         recurrent_sac_network,

@@ -52,13 +52,8 @@ class FixedStdNormalTanhDistribution(distribution.ParametricDistribution):
         return distribution._NormalDistribution(*parameters)
 
 
-def _policy_rngs(rng: PRNGKey | None):
-    if rng is None:
-        return None
-    return {
-        "dropout": rng,
-        "policy": jax.random.fold_in(rng, 1),
-    }
+# Shared with brax.training.networks (fork addition there).
+_policy_rngs = networks._policy_rngs
 
 
 def get_rnn_cell(

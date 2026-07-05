@@ -27,7 +27,7 @@ Operates on batched sequences with leading shape ``[B, T, ...]``. Each loss:
     of the BPTT unroll (no stop_gradient at the boundary).
 """
 
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 from brax.training import types
 from brax.training.agents.recurrent_sac import networks as recurrent_sac_networks

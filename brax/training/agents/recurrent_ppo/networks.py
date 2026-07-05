@@ -20,7 +20,6 @@ from typing import Any, Callable, Literal, Mapping, Sequence, Tuple, Union
 from brax.training import distribution
 from brax.training import networks
 from brax.training import types
-from brax.training.acme import running_statistics
 from brax.training.types import PRNGKey
 import flax
 from flax import linen
@@ -38,13 +37,8 @@ ActivationFn = Callable[[jnp.ndarray], jnp.ndarray]
 Initializer = Callable[..., Any]
 
 
-def _policy_rngs(rng: PRNGKey | None):
-    if rng is None:
-        return None
-    return {
-        "dropout": rng,
-        "policy": jax.random.fold_in(rng, 1),
-    }
+# Shared with brax.training.networks (fork addition there).
+_policy_rngs = networks._policy_rngs
 
 
 class LowRankSimpleCell(linen.RNNCellBase):

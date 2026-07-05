@@ -1015,25 +1015,15 @@ def train(
             {},
         )
 
-    # jax.device_put_replicated was removed in jax 0.10; replicate across
-    # devices via an explicit sharding (mirrors brax upstream ppo/train.py).
-    devices = jax.local_devices()[:local_devices_to_use]
-    mesh = jax.sharding.Mesh(np.array(devices), ('_device_put_sharded',))
-    sharding = jax.NamedSharding(mesh, jax.P('_device_put_sharded'))
-
-    def _replicate(x):
-        if isinstance(x, jax.Array):
-            return jax.device_put(jnp.stack([x] * len(devices)), sharding)
-        return jax.device_put(np.stack([x] * len(devices)), sharding)
-
-    training_state = jax.tree_util.tree_map(_replicate, training_state)
+    training_state = pmap.bcast_local_devices(
+        training_state, local_devices_to_use
+    )
 
     # Initialize policy hidden state for training
     # Shape: [num_devices, envs_per_device, hidden_size]
     def init_policy_hidden_for_training():
         hidden = rnn_ppo_network.policy_network.init_hidden(envs_per_device)
-        # Replicate across devices (reuses the sharding defined above).
-        return jax.tree_util.tree_map(_replicate, hidden)
+        return pmap.bcast_local_devices(hidden, local_devices_to_use)
 
     policy_hidden = init_policy_hidden_for_training()
 
