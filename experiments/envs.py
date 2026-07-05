@@ -52,7 +52,7 @@ def default_config() -> config_dict.ConfigDict:
         action_repeat=1,
         vision=False,
         impl="jax",
-        nconmax=0,
+        naconmax=0,
         njmax=0,
     )
 
@@ -71,9 +71,14 @@ class PendulumSwingupPartialObs(mjx_env.MjxEnv):
 
     def __init__(
         self,
-        config: config_dict.ConfigDict = default_config(),
+        config: Optional[config_dict.ConfigDict] = None,
         config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None,
     ):
+        # A fresh config per construction: MjxEnv locks and mutates the config
+        # in place, so a default_config() evaluated at def-time would leak
+        # config_overrides across instances.
+        if config is None:
+            config = default_config()
         super().__init__(config, config_overrides)
         if self._config.vision:
             raise NotImplementedError(
@@ -105,7 +110,7 @@ class PendulumSwingupPartialObs(mjx_env.MjxEnv):
             self.mj_model,
             qpos=qpos,
             impl=self.mjx_model.impl.value,
-            naconmax=self._config.nconmax,
+            naconmax=self._config.naconmax,
             njmax=self._config.njmax,
         )
         data = mjx.forward(self.mjx_model, data)

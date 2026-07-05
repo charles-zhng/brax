@@ -35,6 +35,7 @@ import csv
 import json
 import os
 import pickle
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -52,6 +53,18 @@ from experiments import envs as envs_lib
 # Config handling
 # ============================================================================
 
+_SCI_NOTATION = re.compile(r'^[+-]?\d+(\.\d*)?[eE][+-]?\d+$')
+
+
+def _parse_override_value(raw_value):
+    value = yaml.safe_load(raw_value)
+    # YAML 1.1 parses dotless scientific notation ('3e-4') as a string;
+    # treat it as the float the user obviously meant.
+    if isinstance(value, str) and _SCI_NOTATION.match(value):
+        return float(value)
+    return value
+
+
 def load_config(path, overrides):
     with open(path) as f:
         cfg = yaml.safe_load(f)
@@ -62,8 +75,11 @@ def load_config(path, overrides):
         node = cfg
         parts = key.split('.')
         for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = yaml.safe_load(raw_value)
+            # A bare `section:` line parses as None — treat it as empty.
+            if node.get(part) is None:
+                node[part] = {}
+            node = node[part]
+        node[parts[-1]] = _parse_override_value(raw_value)
     for required in ('algo', 'env', 'num_timesteps'):
         if required not in cfg:
             raise ValueError(f'Config is missing required key {required!r}')
@@ -163,18 +179,18 @@ class MetricsCollector:
 # Rollout + video
 # ============================================================================
 
-def rollout_policy(env, act_fn, initial_carry, num_steps, seed):
+def rollout_policy(reset_fn, step_fn, act_fn, initial_carry, num_steps, seed):
     """Single-env deterministic rollout; returns (trajectory, total_reward)."""
     key = jax.random.PRNGKey(seed)
     key, reset_key = jax.random.split(key)
-    state = env.reset(reset_key)
+    state = reset_fn(reset_key)
     trajectory = [state]
     carry = initial_carry
     total_reward = 0.0
     for _ in range(num_steps):
         key, action_key = jax.random.split(key)
         action, carry = act_fn(state.obs, carry, action_key)
-        state = env.step(state, action)
+        state = step_fn(state, action)
         trajectory.append(state)
         total_reward += float(state.reward)
         if state.done:
@@ -193,16 +209,23 @@ def render_video(env, trajectory, save_path, fps=50, width=640, height=480):
 
 def generate_video(env, algo, network, make_policy, params, output_dir,
                    num_steps, seeds=(0, 42, 100, 200, 300)):
-    if not hasattr(env, 'render'):
-        print(f'Env {type(env).__name__} has no render(); skipping video.')
+    # Only mujoco_playground envs are renderable here; brax-registry envs
+    # (e.g. 'fast') define render() but lack the pipeline state it needs.
+    if not hasattr(env, 'mj_model'):
+        print(f'Env {type(env).__name__} is not renderable; skipping video.')
         return
     act_fn, initial_carry = algos_lib.make_act_fn(algo, network, make_policy, params)
+    reset_fn, step_fn = jax.jit(env.reset), jax.jit(env.step)
     best_trajectory, best_reward = None, -float('inf')
     for seed in seeds:
-        trajectory, reward = rollout_policy(env, act_fn, initial_carry, num_steps, seed)
+        trajectory, reward = rollout_policy(
+            reset_fn, step_fn, act_fn, initial_carry, num_steps, seed)
         print(f'Rollout seed {seed}: reward={reward:.2f} ({len(trajectory)} steps)')
         if reward > best_reward:
             best_reward, best_trajectory = reward, trajectory
+    if best_trajectory is None:
+        print('No rollout produced a finite reward; skipping video.')
+        return
     print(f'Best rollout reward: {best_reward:.2f}')
     render_video(env, best_trajectory, os.path.join(output_dir, 'rollout.mp4'))
 

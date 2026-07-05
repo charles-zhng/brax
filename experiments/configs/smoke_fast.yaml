@@ -1,7 +1,10 @@
 # Tiny smoke test on brax's debug 'fast' env — finishes in ~1 min on CPU.
-# Override the algo to smoke-test others:
+# The train/network blocks below are PPO-shaped; to smoke-test another algo,
+# replace them wholesale (train() kwargs are not interchangeable), e.g.:
 #   python -m experiments.run --config experiments/configs/smoke_fast.yaml \
-#       --set algo=rnn_sac --set 'network={cell_type: gru, rnn_hidden_size: 16}'
+#     --set algo=rnn_sac \
+#     --set 'network={cell_type: gru, rnn_hidden_size: 16, policy_output_layer_sizes: [16], q_hidden_layer_sizes: [16]}' \
+#     --set 'train={learning_rate: 3.0e-4, batch_size: 8, unroll_length: 8, min_replay_size: 256, max_replay_size: 4096, grad_updates_per_step: 2}'
 algo: rnn_ppo
 env: fast
 num_timesteps: 2048

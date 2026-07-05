@@ -20,7 +20,6 @@ from typing import Any, Callable, Literal, Mapping, Sequence, Tuple, Union
 from brax.training import distribution
 from brax.training import networks
 from brax.training import types
-from brax.training.acme import running_statistics
 from brax.training.types import PRNGKey
 import flax
 from flax import linen
@@ -545,6 +544,7 @@ def make_rnn_ppo_networks(
     mean_bias_init_fn: Initializer | None = None,
     mean_bias_init_kwargs: Mapping[str, Any] | None = None,
     feature_gamma: float = 1.0,
+    input_skip: bool = False,
 ) -> RNNPPONetworks:
     """Make RNN-PPO networks with preprocessor.
 
@@ -638,6 +638,7 @@ def make_rnn_ppo_networks(
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
             mean_bias_init=mean_bias_init,
+            input_skip=input_skip,
         )
     else:
         # For fixed-std or unsquashed Gaussians, output mean and std separately.
@@ -656,6 +657,7 @@ def make_rnn_ppo_networks(
             mean_clip_scale=mean_clip_scale,
             mean_kernel_init=mean_kernel_init,
             mean_bias_init=mean_bias_init,
+            input_skip=input_skip,
         )
 
     # Create value module (standard MLP, non-recurrent)

@@ -165,8 +165,13 @@ class PartialObsWrapper(Wrapper):
         return {'state': len(self._visible_idx), 'privileged_state': full}
 
 
-def wrap_mjx_env(env, episode_length, action_repeat, **kwargs):
+def wrap_mjx_env(env, episode_length, action_repeat, randomization_fn=None):
     """Wrap a mujoco_playground MjxEnv for brax training."""
+    if randomization_fn is not None:
+        raise NotImplementedError(
+            'wrap_mjx_env does not support domain randomization; use '
+            "mujoco_playground's wrap_for_brax_training for randomized envs."
+        )
     env = MjxVmapWrapper(env)
     env = MjxEpisodeWrapper(env, episode_length, action_repeat)
     env = MjxAutoResetWrapper(env)
